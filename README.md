@@ -1,5 +1,9 @@
 # 🌊 pg_flo
 
+## ![](internal/demo.gif)
+
+[![CI](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml)
+
 `pg_flo` is the easiest way to move and transform data from PostgreSQL. It users PostgreSQL Logical Replication to stream inserts, updates, deletes, and DDL changes to multiple destinations. With support for parallelizable bulk copy, near real-time streaming, and powerful transformation and filtering rules, `pg_flo` simplifies data sync and ETL processes.
 
 ⚠️ CURRENTLY UNDER ACTIVE DEVELOPMENT. ACCEPTING FEEDBACK/ISSUES/PULL REQUESTS 🚀
@@ -30,6 +34,7 @@
 - Supports tracking DDL changes.
 - Configurable via command-line flags or environment variables.
 - Supports copy and stream mode to parallelize bulk copy and stream changes.
+- Resumable streaming from last `lsn` position.
 
 I invite you to take a look through [issues](https://github.com/shayonj/pg_flo/issues) to see what's coming next 🤗.
 
@@ -81,7 +86,6 @@ You can configure `pg_flo` using a YAML configuration file or environment variab
 
 ### Example 1: Basic streaming of changes to STDOUT
 
-````shell
 ```shell
 pg_flo stream stdout \
   --host localhost \
@@ -92,7 +96,7 @@ pg_flo stream stdout \
   --group your_group \
   --schema public \
   --tables table1,table2
-````
+```
 
 ### Example 2: Using Configuration File
 
@@ -148,6 +152,10 @@ pg_flo stream file \
 - `make build`
 - `make test`
 - `make lint`
+
+## How it Works
+
+You can read about how the tool works briefly here [here](internal/how-it-works.md).
 
 ### End-to-End Tests
 

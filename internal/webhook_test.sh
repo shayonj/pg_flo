@@ -3,7 +3,7 @@ set -euo pipefail
 
 source "$(dirname "$0")/e2e_common.sh"
 
-WEBHOOK_URL="https://big-lamp-86.webhook.cool"
+WEBHOOK_URL="https://deep-article-49.webhook.cool"
 
 setup_docker() {
   rm -Rf /tmp/pg*
