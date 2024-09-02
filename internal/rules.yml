@@ -1,0 +1,31 @@
+tables:
+  users:
+    - type: transform
+      column: email
+      parameters:
+        type: mask
+        mask_char: "*"
+        allow_empty_deletes: true
+      operations: [INSERT, UPDATE, DELETE]
+    - type: transform
+      column: phone
+      parameters:
+        type: regex
+        pattern: "^(\\d{3})(\\d{3})(\\d{4})$"
+        replace: "($1) $2-$3"
+        allow_empty_deletes: true
+      operations: [INSERT, UPDATE, DELETE]
+    - type: filter
+      column: age
+      parameters:
+        operator: "gte"
+        value: 18
+        allow_empty_deletes: true
+      operations: [INSERT, UPDATE, DELETE]
+    - type: transform
+      column: ssn
+      parameters:
+        type: mask
+        mask_char: "X"
+        allow_empty_deletes: true
+      operations: [INSERT, UPDATE, DELETE]

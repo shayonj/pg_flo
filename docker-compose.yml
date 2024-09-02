@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: pg_logical_replication
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: mydb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=5"
+      - "-c"
+      - "max_wal_senders=5"
+    restart: unless-stopped
+
+  target_postgres:
+    image: postgres:14
+    container_name: pg_target
+    environment:
+      POSTGRES_USER: targetuser
+      POSTGRES_PASSWORD: targetpassword
+      POSTGRES_DB: targetdb
+    volumes:
+      - target_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  target_postgres_data:
