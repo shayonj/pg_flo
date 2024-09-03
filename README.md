@@ -13,25 +13,30 @@
 - [Usage](#usage)
   - [Basic Usage](#basic-usage)
   - [Configuration](#configuration)
-  - [Environment Variables](#environment-variables)
-- [Examples](#examples)
   - [Group](#group)
-  - [Example 1: Basic streaming of changes to STDOUT](#example-1-basic-streaming-of-changes-to-stdout)
-  - [Example 2: Using Configuration File](#example-2-using-configuration-file)
-  - [Example 3: With Transformation and Filtering Rules](#example-3-with-transformation-and-filtering-rules)
-    - [Transformation Rules](#transformation-rules)
-    - [Filtering Rules](#filtering-rules)
-    - [Rule Properties](#rule-properties)
-- [Supported Sinks](#supported-sinks)
+- [Streaming Modes](#streaming-modes)
+  - [Stream Mode](#stream-mode)
+    - [Usage](#usage-1)
+  - [Copy and Stream Mode](#copy-and-stream-mode)
+    - [Usage](#usage-2)
+    - [Additional Flags](#additional-flags)
+  - [Examples](#examples)
+- [Transformation and Filtering Rules](#transformation-and-filtering-rules)
+  - [Transformation Rules](#transformation-rules)
+  - [Filtering Rules](#filtering-rules)
+  - [Rule Properties](#rule-properties)
+- [Supported Destinations](#supported-destinations)
+- [How it Works](#how-it-works)
 - [Development](#development)
   - [End-to-End Tests](#end-to-end-tests)
 - [Contributing](#contributing)
+- [License](#license)
 
 ## Features
 
-- Stream data changes from PostgreSQL to multiple destinations.
+- Stream data changes (`INSERT`/`UPDATE`/`DELETE`) from PostgreSQL to multiple destinations.
 - Type aware transformation and filtering rules so only filtered and transformed data reaches the destination.
-- Supports tracking DDL changes.
+- Supports tracking DDL changes (`ALTER`, `CREATE INDEX`, `DROP INDEX`).
 - Configurable via command-line flags or environment variables.
 - Supports copy and stream mode to parallelize bulk copy and stream changes.
 - Resumable streaming from last `lsn` position.
@@ -66,25 +71,43 @@ pg_flo stream stdout \
 
 ### Configuration
 
-You can configure `pg_flo` using a YAML configuration file or environment variables. By default, `pg_flo` looks for a configuration file at `$HOME/.pg_flo.yaml`. You can reference the example configuration file at [internal/pg-flo.yaml](internal/pg-flo.yaml)
-
-### Environment Variables
-
-`pg_flo` also supports environment variables for configuration:
-
-- `PGHOST`
-- `PGPORT`
-- `PGDATABASE`
-- `PGUSER`
-- `PGPASSWORD`
-
-## Examples
+You can configure `pg_flo` using CLI flags, a YAML configuration file or environment variables. By default, `pg_flo` looks for a configuration file at `$HOME/.pg_flo.yaml`. You can reference the example configuration file at [internal/pg-flo.yaml](internal/pg-flo.yaml)
 
 ### Group
 
 `--group`: This parameter is used to identify each replication process which can contain one or more or all tables. It allows you to run multiple instances of `pg_flo` on the same database or across different databases without conflicts. The group name is used to isolate replication slots and publications in PostgreSQL, and can also be used to for some internal state keeping for resumability sake.
 
-### Example 1: Basic streaming of changes to STDOUT
+## Streaming Modes
+
+`pg_flo` supports two modes of operation: `stream` mode and `copy-and-stream` mode.
+
+### Stream Mode
+
+With Stream mode `pg_flo` continuously streams changes from the source PostgreSQL database to the specified sink, it will start streaming changes from the last known WAL Position.
+
+#### Usage
+
+```shell
+pg_flo stream <sink_type> [flags]
+```
+
+### Copy and Stream Mode
+
+Copy-and-stream mode performs an initial parallelizable bulk copy of the existing data before starting the streaming process (without data loss or duplication). This ensures that the destination has a complete copy of the data without any loss or duplication.
+
+#### Usage
+
+```shell
+pg_flo copy-and-stream <sink_type> [flags]
+```
+
+#### Additional Flags
+
+- `--max-copy-workers`: Number of parallel connections for the copy operation (default: 4)
+
+### Examples
+
+1. Stream mode with STDOUT sink:
 
 ```shell
 pg_flo stream stdout \
@@ -98,24 +121,38 @@ pg_flo stream stdout \
   --tables table1,table2
 ```
 
-### Example 2: Using Configuration File
+2. Copy-and-stream mode with File sink:
 
 ```shell
-pg_flo stream stdout --config /path/to/pg_flo.yaml
+pg_flo copy-and-stream file \
+  --host localhost \
+  --port 5432 \
+  --dbname your_database \
+  --user your_user \
+  --password your_password \
+  --group your_group \
+  --schema public \
+  --tables table1,table2 \
+  --output-dir /tmp/pg_flo-output \
+  --max-copy-workers 8
 ```
 
-### Example 3: With Transformation and Filtering Rules
+Both modes are available for all supported [sink types](pkg/sinks/README.md), and any configured rules or transformations are applied to operations in both modes.
 
-#### Transformation Rules
+## Transformation and Filtering Rules
+
+With pg_flo, you can apply powerful transformation and filtering rules to your data streams. These rules allow you to modify data on-the-fly (transformation) or selectively process only certain records (filtering) based on specified conditions.
+
+### Transformation Rules
 
 - **Mask**: Replace characters in a column with a specified mask character.
 - **Regex**: Apply a regular expression pattern to transform column values.
 
-#### Filtering Rules
+### Filtering Rules
 
 - **Comparison Operators**: Filter rows based on column values or operation types (e.g., greater than or equal to). Only operations that match these the filtering rules will be emitted to the destination.
 
-#### Rule Properties
+### Rule Properties
 
 - `type`: The type of rule (transform or filter).
 - `column`: The column to apply the rule to.
@@ -141,9 +178,13 @@ pg_flo stream file \
   --rules-config /path/to/rules-config.yaml
 ```
 
-## Supported Sinks
+## Supported Destinations
 
-`pg_flo` supports various sink types (destinations) for streaming data changes. You can read more about the supported Sinks and the interface [here](pkg/sinks/README.md).
+`pg_flo` supports various sink types (destinations) for streaming data changes. You can read more about the supported Sinks with examples and the interface [here](pkg/sinks/README.md).
+
+## How it Works
+
+You can read about how the tool works briefly here [here](internal/how-it-works.md).
 
 ## Development
 
@@ -152,10 +193,6 @@ pg_flo stream file \
 - `make build`
 - `make test`
 - `make lint`
-
-## How it Works
-
-You can read about how the tool works briefly here [here](internal/how-it-works.md).
 
 ### End-to-End Tests
 

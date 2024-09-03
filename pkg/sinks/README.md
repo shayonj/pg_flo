@@ -2,6 +2,27 @@
 
 pg_flo supports various sink types (destinations) for streaming data changes. This document provides an overview of the supported sinks and how to use them via the command-line interface.
 
+- [Available Sinks](#available-sinks)
+- [Common Flags](#common-flags)
+- [STDOUT Sink](#stdout-sink)
+  - [Usage](#usage)
+  - [Example](#example)
+- [File Sink](#file-sink)
+  - [Usage](#usage-1)
+  - [Additional Flags](#additional-flags)
+  - [Example](#example-1)
+- [PostgreSQL Sink](#postgresql-sink)
+  - [Usage](#usage-2)
+  - [Additional Flags](#additional-flags-1)
+  - [Example](#example-2)
+  - [Additional Behavior](#additional-behavior)
+- [Webhook Sink](#webhook-sink)
+  - [Usage](#usage-3)
+  - [Additional Flags](#additional-flags-2)
+  - [Example](#example-3)
+  - [Additional Behavior](#additional-behavior-1)
+- [Sink Interface](#sink-interface)
+
 ## Available Sinks
 
 1. STDOUT
@@ -115,6 +136,15 @@ pg_flo stream postgres \
   --sync-schema
 ```
 
+### Additional Behavior
+
+- Supports schema synchronization between source and target databases using `pg_dump` when the `--sync-schema` flag is set.
+- Creates an `internal_pg_flo` schema and `lsn_status` table to keep track of the last processed LSN.
+- Handles `INSERT`, `UPDATE`, `DELETE`, and `DDL` operations.
+- Uses `UPSERT` (`INSERT ... ON CONFLICT DO UPDATE`) for handling both `INSERT` and `UPDATE` operations efficiently.
+- Executes operations within a transaction for each batch of changes.
+- Rolls back the transaction and logs an error if any operation in the batch fails.
+
 ## Webhook Sink
 
 The Webhook sink sends changes as HTTP POST requests to a specified URL.
@@ -145,43 +175,21 @@ pg_flo stream webhook \
   --webhook-url https://your-webhook-endpoint.com/receive
 ```
 
-### Behavior
+### Additional Behavior
 
-- The Webhook sink sends each change as a separate HTTP POST request to the specified URL.
-- It includes a custom User-Agent header: "pg_flo/1.0".
-- In case of failure, it will retry the request up to 3 times before giving up.
-- The payload is sent as JSON in the request body.
+- Sends each change as a separate HTTP POST request to the specified webhook URL.
+- Implements a retry mechanism with up to 3 attempts for failed requests.
+- Considers both network errors and non-2xx status codes as failures that trigger retries.
+- Maintains a status file to keep track of the last processed LSN.
+- The status file is stored in the specified status directory with the name `pg_flo_webhook_last_lsn.json`.
 
-### Error Handling
+## Sink Interface
 
-- If a non-2xx status code is received, the sink will retry the request up to 3 times.
-- If all retries fail, an error will be logged, and the replication process will stop.
+`pg_flo` uses a common interface for all sink types, allowing for easy implementation of new sinks. The `Sink` interface defines the following methods:
 
-## Copy and Stream Mode
+- `WriteBatch(data []interface{}) error`: Writes a batch of changes to the sink.
+- `GetLastLSN() (pglogrepl.LSN, error)`: Retrieves the last processed LSN (Log Sequence Number).
+- `SetLastLSN(lsn pglogrepl.LSN) error`: Sets the last processed LSN.
+- `Close() error`: Closes the sink, releasing any resources or connections.
 
-pg_flo also supports a "copy and stream" mode, which performs an initial parallelizable bulk copy of the data before starting the streaming process without any data loss or duplication. This mode is available for all sink types.
-
-### Usage
-
-Replace `stream` with `copy-and-stream` in the commands above.
-
-### Additional Flags
-
-- `--max-copy-workers`: Number of parallel connections for copy and stream mode (default: 4)
-
-### Example (File Sink with Copy and Stream)
-
-```shell
-pg_flo copy-and-stream file \
-  --host localhost \
-  --port 5432 \
-  --dbname your_database \
-  --user your_user \
-  --password your_password \
-  --group your_group \
-  --tables table1,table2 \
-  --schema public \
-  --status-dir /tmp/pg_flo-status \
-  --output-dir /tmp/pg_flo-output \
-  --max-copy-workers 8
-```
+Sinks can save the last processed `LSN` at the destination (as appropriate). This ensures that if a `pg_flo` process shuts down (for example, during a deployment) and starts again, it knows where to resume from.
