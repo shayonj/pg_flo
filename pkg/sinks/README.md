@@ -98,7 +98,7 @@ pg_flo stream file \
 
 ## PostgreSQL Sink
 
-The PostgreSQL sink streams changes to another PostgreSQL database.
+The PostgreSQL sink replicates changes to another PostgreSQL database. To ensure accurate replication of updates and deletes, all tables must have a primary key defined.
 
 ### Usage
 
