@@ -1,25 +1,23 @@
 package utils
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
 	"time"
-
-	"github.com/jackc/pgtype"
 )
 
 // ParseTimestamp attempts to parse a timestamp string using multiple layouts
 func ParseTimestamp(value string) (time.Time, error) {
 	layouts := []string{
-		time.RFC3339,
+		time.RFC3339Nano,
 		"2006-01-02 15:04:05.999999-07",
+		"2006-01-02 15:04:05.999999Z07:00",
 		"2006-01-02 15:04:05.999999",
-		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05.999999Z",
 		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05Z",
 	}
 
 	for _, layout := range layouts {
@@ -63,72 +61,66 @@ func ToFloat64(v interface{}) (float64, bool) {
 	return 0, false
 }
 
-// NewCDCEncoder creates a new CDCEncoder
-func NewCDCEncoder(w interface{ Write([]byte) (int, error) }) *CDCEncoder {
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false)
-	return &CDCEncoder{encoder: encoder}
-}
-
-// MarshalJSON is a helper function to use the CDCEncoder for marshaling
-func MarshalJSON(v interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := NewCDCEncoder(&buf)
-	err := encoder.Encode(v)
-	if err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-// CDCEncoder is a custom JSON encoder that preserves CDC data types
-type CDCEncoder struct {
-	encoder *json.Encoder
-}
-
-// Encode encodes the value v and writes it into the stream
-func (e *CDCEncoder) Encode(v interface{}) error {
-	return e.encoder.Encode(preserveCDCTypes(v))
-}
-
-// preserveCDCTypes recursively processes the value and preserves CDC data types
-func preserveCDCTypes(v interface{}) interface{} {
+// ToBool converts a value to bool
+func ToBool(v interface{}) bool {
 	switch v := v.(type) {
-	case map[string]interface{}:
-		for k, val := range v {
-			v[k] = preserveCDCTypes(val)
-		}
-	case []interface{}:
-		for i, val := range v {
-			v[i] = preserveCDCTypes(val)
-		}
-	case float64:
-		return v
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return v
-	case string:
-		return v
 	case bool:
 		return v
-	case nil:
-		return nil
-	case CDCValue:
-		switch v.Type {
-		case pgtype.ByteaOID:
-			// Encode binary data as base64
-			return CDCValue{
-				Type:  v.Type,
-				Value: base64.StdEncoding.EncodeToString(v.Value.([]byte)),
-			}
-		case pgtype.JSONBOID, pgtype.Int4ArrayOID, pgtype.TextArrayOID, pgtype.NumericOID:
-			// These types can be returned as-is
-			return v
-		default:
-			return v
-		}
-	case []byte:
-		// Encode binary data as base64
-		return base64.StdEncoding.EncodeToString(v)
+	case string:
+		b, _ := strconv.ParseBool(v)
+		return b
 	}
-	return v
+	return false
+}
+
+// ToByteSlice converts a value to []byte
+func ToByteSlice(v interface{}) []byte {
+	switch v := v.(type) {
+	case []byte:
+		return v
+	case string:
+		return []byte(v)
+	}
+	return nil
+}
+
+// ToTime converts a value to time.Time
+func ToTime(v interface{}) time.Time {
+	switch v := v.(type) {
+	case time.Time:
+		return v
+	case string:
+		t, err := ParseTimestamp(v)
+		if err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// ToJSON converts a value to json.RawMessage
+func ToJSON(v interface{}) json.RawMessage {
+	switch v := v.(type) {
+	case json.RawMessage:
+		return v
+	case string:
+		return json.RawMessage(v)
+	case []byte:
+		return json.RawMessage(v)
+	default:
+		data, _ := json.Marshal(v)
+		return json.RawMessage(data)
+	}
+}
+
+// ToString converts a value to string
+func ToString(v interface{}) string {
+	switch v := v.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }

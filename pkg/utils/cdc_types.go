@@ -1,9 +1,12 @@
 package utils
 
 import (
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgtype"
 )
 
@@ -13,6 +16,20 @@ type CDCValue struct {
 	Value interface{}
 }
 
+// CDCMessage represents a full message for Change Data Capture
+type CDCMessage struct {
+	Type             string
+	Schema           string
+	Table            string
+	Columns          []*pglogrepl.RelationMessageColumn
+	NewTuple         *pglogrepl.TupleData
+	OldTuple         *pglogrepl.TupleData
+	PrimaryKeyColumn string
+	LSN              pglogrepl.LSN
+	CommitTimestamp  time.Time
+}
+
+// OidToTypeName maps PostgreSQL OIDs to their corresponding type names
 var OidToTypeName = map[uint32]string{
 	pgtype.BoolOID:             "bool",
 	pgtype.ByteaOID:            "bytea",
@@ -51,18 +68,49 @@ var OidToTypeName = map[uint32]string{
 	pgtype.JSONBArrayOID:       "jsonb[]",
 }
 
-// MarshalJSON implements the json.Marshaler interface for CDCValue
-func (cv CDCValue) MarshalJSON() ([]byte, error) {
-	return json.Marshal(map[string]interface{}{
-		"type":  OIDToString(cv.Type),
-		"value": cv.Value,
-	})
-}
-
 // OIDToString converts a PostgreSQL OID to its string representation
 func OIDToString(oid uint32) string {
 	if typeName, ok := OidToTypeName[oid]; ok {
 		return typeName
 	}
 	return fmt.Sprintf("unknown_%d", oid)
+}
+
+// StringToOID converts a type name to its PostgreSQL OID
+func StringToOID(typeName string) uint32 {
+	for oid, name := range OidToTypeName {
+		if name == typeName {
+			return oid
+		}
+	}
+	return 0 // or some error value
+}
+
+// init registers types with the gob package for encoding/decoding
+func init() {
+	gob.Register(json.RawMessage{})
+	gob.Register(time.Time{})
+	gob.Register(map[string]interface{}{})
+	gob.Register(pglogrepl.RelationMessageColumn{})
+	gob.Register(pglogrepl.LSN(0))
+
+	gob.Register(CDCMessage{})
+	gob.Register(pglogrepl.TupleData{})
+	gob.Register(pglogrepl.TupleDataColumn{})
+	gob.Register(time.Time{})
+}
+
+// MarshalBinary implements the encoding.BinaryMarshaler interface
+func (m CDCMessage) MarshalBinary() ([]byte, error) {
+	return EncodeCDCMessage(m)
+}
+
+// UnmarshalBinary implements the encoding.BinaryUnmarshaler interface
+func (m *CDCMessage) UnmarshalBinary(data []byte) error {
+	decodedMessage, err := DecodeCDCMessage(data)
+	if err != nil {
+		return err
+	}
+	*m = *decodedMessage
+	return nil
 }

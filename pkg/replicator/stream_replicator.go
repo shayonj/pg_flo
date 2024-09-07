@@ -70,12 +70,11 @@ func (r *StreamReplicator) handleShutdownSignal(sigChan <-chan os.Signal, cancel
 	cancel()
 }
 
-// getStartLSN determines the starting LSN for replication. The actual shutdown logic
-// is handled in BaseReplicator.StartReplicationFromLSN
+// getStartLSN determines the starting LSN for replication.
 func (r *StreamReplicator) getStartLSN() (pglogrepl.LSN, error) {
-	startLSN, err := r.Sink.GetLastLSN()
+	startLSN, err := r.BaseReplicator.GetLastState()
 	if err != nil {
-		r.Logger.Warn().Err(err).Msg("Failed to get last LSN from sink, starting from 0")
+		r.Logger.Warn().Err(err).Msg("Failed to get last LSN, starting from 0")
 		return pglogrepl.LSN(0), nil
 	}
 	return startLSN, nil

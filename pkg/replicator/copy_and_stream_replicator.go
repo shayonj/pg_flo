@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
-	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
@@ -310,7 +309,7 @@ func (r *CopyAndStreamReplicator) buildCopyQuery(tableName string, startPage, en
 	return query
 }
 
-// executeCopyQuery executes the copy query and writes the results to the sink.
+// executeCopyQuery executes the copy query and publishes the results to NATS.
 func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.Tx, query, schema, tableName string, startPage, endPage uint32, workerID int) (int64, error) {
 	r.Logger.Debug().Str("copyQuery", query).Int("workerID", workerID).Msg("Executing initial copy query")
 
@@ -321,9 +320,12 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 	defer rows.Close()
 
 	fieldDescriptions := rows.FieldDescriptions()
-	columnNames := make([]string, len(fieldDescriptions))
+	columns := make([]*pglogrepl.RelationMessageColumn, len(fieldDescriptions))
 	for i, fd := range fieldDescriptions {
-		columnNames[i] = fd.Name
+		columns[i] = &pglogrepl.RelationMessageColumn{
+			Name:     fd.Name,
+			DataType: fd.DataTypeOID,
+		}
 	}
 
 	var copyCount int64
@@ -333,35 +335,32 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 			return 0, fmt.Errorf("error reading row: %v", err)
 		}
 
-		newRow := make(map[string]utils.CDCValue)
-		for i, name := range columnNames {
-			newRow[name] = utils.CDCValue{
-				Type:  fieldDescriptions[i].DataTypeOID,
-				Value: values[i],
-			}
+		tupleData := &pglogrepl.TupleData{
+			Columns: make([]*pglogrepl.TupleDataColumn, len(values)),
 		}
-
-		// Apply rules if the rule engine is available
-		if r.BaseReplicator.RuleEngine != nil {
-			newRow, err = r.BaseReplicator.RuleEngine.ApplyRules(tableName, newRow, rules.OperationInsert)
+		for i, value := range values {
+			data, err := utils.ConvertToPgOutput(value, fieldDescriptions[i].DataTypeOID)
 			if err != nil {
-				return 0, fmt.Errorf("failed to apply rules: %v", err)
+				return 0, fmt.Errorf("error converting value: %v", err)
 			}
-			if newRow == nil {
-				// Row filtered out by rules
-				continue
+
+			tupleData.Columns[i] = &pglogrepl.TupleDataColumn{
+				DataType: uint8(fieldDescriptions[i].DataTypeOID),
+				Data:     data,
 			}
 		}
 
-		insertEvent := map[string]interface{}{
-			"type":    "INSERT",
-			"schema":  schema,
-			"table":   tableName,
-			"new_row": newRow,
+		cdcMessage := utils.CDCMessage{
+			Type:     "INSERT",
+			Schema:   schema,
+			Table:    tableName,
+			Columns:  columns,
+			NewTuple: tupleData,
 		}
-		r.BaseReplicator.addPrimaryKeyInfo(insertEvent, tableName)
-		if err := r.bufferWrite(insertEvent); err != nil {
-			return 0, fmt.Errorf("failed to write insert event to Buffer: %v", err)
+
+		r.BaseReplicator.AddPrimaryKeyInfo(&cdcMessage, tableName)
+		if err := r.BaseReplicator.PublishToNATS(ctx, cdcMessage); err != nil {
+			return 0, fmt.Errorf("failed to publish insert event to NATS: %v", err)
 		}
 
 		copyCount++
@@ -375,11 +374,6 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("error during row iteration: %v", err)
-	}
-
-	// Flush the buffer after processing all rows for this range
-	if err := r.FlushBuffer(); err != nil {
-		return 0, fmt.Errorf("failed to flush buffer after copying range: %v", err)
 	}
 
 	r.Logger.Info().Str("table", tableName).Int("start_page", int(startPage)).Int("end_page", int(endPage)).Int64("rows_copied", copyCount).Msg("Copied table range")
@@ -399,9 +393,4 @@ func (r *CopyAndStreamReplicator) collectErrors(errChan <-chan error) error {
 		return fmt.Errorf("multiple errors occurred: %v", errs)
 	}
 	return nil
-}
-
-// bufferWrite adds data to the buffer and flushes if necessary
-func (r *CopyAndStreamReplicator) bufferWrite(data interface{}) error {
-	return r.BaseReplicator.bufferWrite(data)
 }
