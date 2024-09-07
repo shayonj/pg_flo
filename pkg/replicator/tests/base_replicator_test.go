@@ -3,46 +3,29 @@ package replicator_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/ioutil"
-	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog"
 	"github.com/shayonj/pg_flo/pkg/replicator"
-	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/utils"
 	"github.com/stretchr/testify/assert"
-
 	"github.com/stretchr/testify/mock"
 )
-
-func newTestRuleEngine() *rules.RuleEngine {
-	ruleEngine := rules.NewRuleEngine()
-
-	// Add a dummy rule that always passes
-	dummyRule := &rules.FilterRule{
-		TableName:  "*",
-		ColumnName: "*",
-		Condition:  func(utils.CDCValue) bool { return true },
-		Operations: []rules.OperationType{rules.OperationInsert, rules.OperationUpdate, rules.OperationDelete},
-	}
-
-	ruleEngine.AddRule("*", dummyRule)
-
-	return ruleEngine
-}
 
 func TestBaseReplicator(t *testing.T) {
 	t.Run("NewBaseReplicator", func(t *testing.T) {
 		mockReplicationConn := new(MockReplicationConnection)
 		mockStandardConn := new(MockStandardConnection)
-		mockSink := new(MockSink)
-		ruleEngine := newTestRuleEngine()
+		mockNATSClient := new(MockNATSClient)
 
 		mockRows := new(MockRows)
 		mockRows.On("Next").Return(false).Once()
@@ -63,18 +46,18 @@ func TestBaseReplicator(t *testing.T) {
 			Group:    "test_group",
 		}
 
-		br := replicator.NewBaseReplicator(config, mockSink, mockReplicationConn, mockStandardConn, ruleEngine)
+		br := replicator.NewBaseReplicator(config, mockReplicationConn, mockStandardConn, mockNATSClient)
 
 		assert.NotNil(t, br)
 		assert.Equal(t, config, br.Config)
-		assert.Equal(t, mockSink, br.Sink)
 		assert.Equal(t, mockReplicationConn, br.ReplicationConn)
 		assert.Equal(t, mockStandardConn, br.StandardConn)
-		assert.Equal(t, ruleEngine, br.RuleEngine)
+		assert.Equal(t, mockNATSClient, br.NATSClient)
 
 		mockStandardConn.AssertExpectations(t)
 		mockRows.AssertExpectations(t)
 	})
+
 	t.Run("CreatePublication", func(t *testing.T) {
 		t.Run("Publication already exists", func(t *testing.T) {
 			mockStandardConn := new(MockStandardConnection)
@@ -89,7 +72,7 @@ func TestBaseReplicator(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				Config:       replicator.Config{Group: "existing_pub"},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.New(ioutil.Discard),
+				Logger:       zerolog.Nop(),
 			}
 
 			err := br.CreatePublication()
@@ -112,7 +95,7 @@ func TestBaseReplicator(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				Config:       replicator.Config{Group: "new_pub"},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.New(ioutil.Discard),
+				Logger:       zerolog.Nop(),
 			}
 
 			err := br.CreatePublication()
@@ -138,7 +121,7 @@ func TestBaseReplicator(t *testing.T) {
 					Tables: []string{"users", "orders"},
 				},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.New(ioutil.Discard),
+				Logger:       zerolog.Nop(),
 			}
 
 			err := br.CreatePublication()
@@ -158,7 +141,7 @@ func TestBaseReplicator(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				Config:       replicator.Config{Group: "error_pub"},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.New(ioutil.Discard),
+				Logger:       zerolog.Nop(),
 			}
 
 			err := br.CreatePublication()
@@ -182,7 +165,7 @@ func TestBaseReplicator(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				Config:       replicator.Config{Group: "new-pub"},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.New(ioutil.Discard),
+				Logger:       zerolog.Nop(),
 			}
 
 			err := br.CreatePublication()
@@ -190,12 +173,13 @@ func TestBaseReplicator(t *testing.T) {
 			assert.Contains(t, err.Error(), "failed to create publication")
 			mockStandardConn.AssertExpectations(t)
 		})
-
 	})
 
 	t.Run("StartReplicationFromLSN", func(t *testing.T) {
 		t.Run("Successful start of replication", func(t *testing.T) {
 			mockReplicationConn := new(MockReplicationConnection)
+			mockNATSClient := new(MockNATSClient)
+
 			mockReplicationConn.On("StartReplication", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			keepaliveMsg := &pgproto3.CopyData{
@@ -217,7 +201,7 @@ func TestBaseReplicator(t *testing.T) {
 					0, 0, 0, 0, 0, 0, 0, 0, // LSN
 					0, 0, 0, 0, 0, 0, 0, 0, // End LSN
 					0, 0, 0, 0, 0, 0, 0, 0, // Timestamp
-					0, 0, 0, 0, // XID
+					0, 0, 0, 0, 0, 0, 0, 0, // XID
 				},
 			}
 
@@ -225,18 +209,13 @@ func TestBaseReplicator(t *testing.T) {
 			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(xLogData, nil).Once()
 			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(nil, context.Canceled).Maybe()
 
-			mockSink := new(MockSink)
-			mockSink.On("GetLastLSN").Return(pglogrepl.LSN(0), nil).Maybe()
-			mockSink.On("SetLastLSN", mock.Anything).Return(nil).Maybe()
-			mockSink.On("WriteBatch", mock.AnythingOfType("[][]byte")).Return(nil).Maybe()
-			mockSink.On("Commit", mock.Anything).Return(nil).Maybe()
+			mockNATSClient.On("GetLastState").Return(pglogrepl.LSN(0), nil).Maybe()
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
-				Sink:            mockSink,
+				NATSClient:      mockNATSClient,
 				Config:          replicator.Config{Group: "test_pub"},
-				Logger:          zerolog.New(ioutil.Discard),
-				Buffer:          replicator.NewBuffer(1000, 5*time.Second),
+				Logger:          zerolog.Nop(),
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -245,7 +224,7 @@ func TestBaseReplicator(t *testing.T) {
 			err := br.StartReplicationFromLSN(ctx, pglogrepl.LSN(0))
 			assert.NoError(t, err, "Expected no error for graceful shutdown")
 			mockReplicationConn.AssertExpectations(t)
-			mockSink.AssertExpectations(t)
+			mockNATSClient.AssertExpectations(t)
 		})
 
 		t.Run("Error occurs while starting replication", func(t *testing.T) {
@@ -278,14 +257,13 @@ func TestBaseReplicator(t *testing.T) {
 			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(keepaliveMsg, nil).Once()
 			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(nil, context.Canceled).Once()
 
-			mockSink := new(MockSink)
-			mockSink.On("GetLastLSN").Return(pglogrepl.LSN(0), nil).Maybe()
-			mockSink.On("SetLastLSN", mock.Anything).Return(nil).Maybe()
+			mockNATSClient := new(MockNATSClient)
+			mockNATSClient.On("GetLastState").Return(pglogrepl.LSN(0), nil).Maybe()
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
-				Sink:            mockSink,
-				Logger:          zerolog.New(ioutil.Discard),
+				NATSClient:      mockNATSClient,
+				Logger:          zerolog.Nop(),
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -294,18 +272,18 @@ func TestBaseReplicator(t *testing.T) {
 			err := br.StreamChanges(ctx)
 			assert.NoError(t, err, "Expected no error for graceful shutdown")
 			mockReplicationConn.AssertExpectations(t)
-			mockSink.AssertExpectations(t)
+			mockNATSClient.AssertExpectations(t)
 		})
 
 		t.Run("Context cancellation", func(t *testing.T) {
 			mockReplicationConn := new(MockReplicationConnection)
-			mockSink := new(MockSink)
-			mockSink.On("GetLastLSN").Return(pglogrepl.LSN(0), nil).Maybe()
-			mockSink.On("SetLastLSN", mock.Anything).Return(nil).Maybe()
+			mockNATSClient := new(MockNATSClient)
+			mockNATSClient.On("GetLastState").Return(pglogrepl.LSN(0), nil).Maybe()
+			mockNATSClient.On("SaveState", mock.Anything).Return(nil).Maybe()
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
-				Sink:            mockSink,
+				NATSClient:      mockNATSClient,
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -314,7 +292,7 @@ func TestBaseReplicator(t *testing.T) {
 			err := br.StreamChanges(ctx)
 			assert.NoError(t, err, "Expected no error for graceful shutdown")
 			mockReplicationConn.AssertExpectations(t)
-			mockSink.AssertExpectations(t)
+			mockNATSClient.AssertExpectations(t)
 		})
 	})
 
@@ -327,29 +305,27 @@ func TestBaseReplicator(t *testing.T) {
 					0, 0, 0, 0, 0, 0, 0, 1, // WAL start: 1
 					0, 0, 0, 0, 0, 0, 0, 2, // WAL end: 2
 					0, 0, 0, 0, 0, 0, 0, 0, // ServerTime: 0
-					'B',                    // Type
-					0, 0, 0, 0, 0, 0, 0, 0, // LSN
-					0, 0, 0, 0, 0, 0, 0, 0, // End LSN
+					'B',                    // Type: BEGIN
+					0, 0, 0, 0, 0, 0, 0, 1, // LSN: 1
+					0, 0, 0, 0, 0, 0, 0, 2, // End LSN: 2
 					0, 0, 0, 0, 0, 0, 0, 0, // Timestamp
-					0, 0, 0, 0, // XID
+					0, 0, 0, 1, // XID: 1
 				},
 			}
 			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(xLogData, nil)
-
-			mockSink := new(MockSink)
+			mockNATSClient := new(MockNATSClient)
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
-				Sink:            mockSink,
-				Logger:          zerolog.New(ioutil.Discard),
-				Buffer:          replicator.NewBuffer(1000, 5*time.Second),
+				NATSClient:      mockNATSClient,
+				Logger:          zerolog.Nop(),
 			}
 
 			lastStatusUpdate := time.Now()
 			err := br.ProcessNextMessage(context.Background(), &lastStatusUpdate, time.Second)
 			assert.NoError(t, err)
 			mockReplicationConn.AssertExpectations(t)
-			mockSink.AssertExpectations(t)
+			mockNATSClient.AssertExpectations(t)
 
 			assert.True(t, lastStatusUpdate.After(time.Now().Add(-time.Second)), "lastStatusUpdate should have been updated")
 		})
@@ -386,10 +362,9 @@ func TestBaseReplicator(t *testing.T) {
 
 	t.Run("HandleInsertMessage", func(t *testing.T) {
 		t.Run("Successful handling of InsertMessage", func(t *testing.T) {
-			mockSink := new(MockSink)
-
+			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
-				Sink: mockSink,
+				NATSClient: mockNATSClient,
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -401,8 +376,7 @@ func TestBaseReplicator(t *testing.T) {
 						},
 					},
 				},
-				Buffer:     replicator.NewBuffer(1000, 5*time.Second),
-				RuleEngine: newTestRuleEngine(),
+				Config: replicator.Config{Group: "test_pub"},
 			}
 
 			msg := &pglogrepl.InsertMessage{
@@ -415,85 +389,28 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			expected := map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "users",
-				"new_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-			}
+			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+				var decodedMsg utils.CDCMessage
+				err := decodedMsg.UnmarshalBinary(data)
+				if err != nil {
+					t.Logf("Failed to unmarshal binary data: %v", err)
+					return false
+				}
 
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
+				assert.Equal(t, "INSERT", decodedMsg.Type)
+				assert.Equal(t, "public", decodedMsg.Schema)
+				assert.Equal(t, "users", decodedMsg.Table)
+				assert.Equal(t, msg.Tuple, decodedMsg.NewTuple)
+				assert.Nil(t, decodedMsg.OldTuple)
+
+				return true
 			})).Return(nil)
 
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleInsertMessage(msg)
+			ctx := context.Background()
+			err := br.HandleInsertMessage(ctx, msg)
 			assert.NoError(t, err)
 
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-
-		t.Run("Successful handling of InsertMessage with rule engine", func(t *testing.T) {
-			mockSink := new(MockSink)
-			ruleEngine := newTestRuleEngine()
-
-			br := &replicator.BaseReplicator{
-				Sink:       mockSink,
-				RuleEngine: ruleEngine,
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					1: {
-						RelationID:   1,
-						Namespace:    "public",
-						RelationName: "users",
-						Columns: []*pglogrepl.RelationMessageColumn{
-							{Name: "id", DataType: pgtype.Int4OID},
-							{Name: "name", DataType: pgtype.TextOID},
-						},
-					},
-				},
-				Buffer: replicator.NewBuffer(1000, 5*time.Second),
-			}
-
-			msg := &pglogrepl.InsertMessage{
-				RelationID: 1,
-				Tuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("John Doe")},
-					},
-				},
-			}
-
-			expected := map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "users",
-				"new_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-			}
-
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
-			})).Return(nil)
-
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleInsertMessage(msg)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
+			mockNATSClient.AssertExpectations(t)
 
 		})
 
@@ -504,18 +421,213 @@ func TestBaseReplicator(t *testing.T) {
 
 			msg := &pglogrepl.InsertMessage{RelationID: 999}
 
-			err := br.HandleInsertMessage(msg)
+			ctx := context.Background()
+			err := br.HandleInsertMessage(ctx, msg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
+		})
+
+		t.Run("Diverse data types", func(t *testing.T) {
+			testCases := []struct {
+				name           string
+				relationFields []struct {
+					name     string
+					dataType uint32
+				}
+				tupleData [][]byte
+				expected  []map[string]interface{}
+			}{
+				{
+					name: "Basic types",
+					relationFields: []struct {
+						name     string
+						dataType uint32
+					}{
+						{"id", pgtype.Int4OID},
+						{"name", pgtype.TextOID},
+						{"active", pgtype.BoolOID},
+						{"score", pgtype.Float8OID},
+					},
+					tupleData: [][]byte{
+						[]byte("1"),
+						[]byte("John Doe"),
+						[]byte("true"),
+						[]byte("9.99"),
+					},
+					expected: []map[string]interface{}{
+						{"name": "id", "type": "int4", "value": int64(1)},
+						{"name": "name", "type": "text", "value": "John Doe"},
+						{"name": "active", "type": "bool", "value": true},
+						{"name": "score", "type": "float8", "value": 9.990000},
+					},
+				},
+				{
+					name: "Complex types",
+					relationFields: []struct {
+						name     string
+						dataType uint32
+					}{
+						{"data", pgtype.JSONBOID},
+						{"tags", pgtype.TextArrayOID},
+						{"image", pgtype.ByteaOID},
+						{"created_at", pgtype.TimestamptzOID},
+					},
+					tupleData: [][]byte{
+						[]byte(`{"key": "value"}`),
+						[]byte("{tag1,tag2,tag3}"),
+						[]byte{0x01, 0x02, 0x03, 0x04},
+						[]byte("2023-05-01 12:34:56.789Z"),
+					},
+					expected: []map[string]interface{}{
+						{"name": "data", "type": "jsonb", "value": json.RawMessage(`{"key": "value"}`)},
+						{"name": "tags", "type": "text[]", "value": "{tag1,tag2,tag3}"},
+						{"name": "image", "type": "bytea", "value": []byte{0x01, 0x02, 0x03, 0x04}},
+						{"name": "created_at", "type": "timestamptz", "value": time.Date(2023, time.May, 1, 12, 34, 56, 789000000, time.UTC)},
+					},
+				},
+				{
+					name: "Numeric types",
+					relationFields: []struct {
+						name     string
+						dataType uint32
+					}{
+						{"small_int", pgtype.Int2OID},
+						{"big_int", pgtype.Int8OID},
+						{"numeric", pgtype.Float8ArrayOID},
+					},
+					tupleData: [][]byte{
+						[]byte("32767"),
+						[]byte("9223372036854775807"),
+						[]byte("123456.789"),
+					},
+					expected: []map[string]interface{}{
+						{"name": "small_int", "type": "int2", "value": int64(32767)},
+						{"name": "big_int", "type": "int8", "value": int64(9223372036854775807)},
+						{"name": "numeric", "type": "float8[]", "value": "123456.789"},
+					},
+				},
+				{
+					name: "Date and time types",
+					relationFields: []struct {
+						name     string
+						dataType uint32
+					}{
+						{"date", pgtype.DateOID},
+						{"time", pgtype.TimeOID},
+						{"interval", pgtype.IntervalOID},
+					},
+					tupleData: [][]byte{
+						[]byte("2023-05-01"),
+						[]byte("15:04:05"),
+						[]byte("1 year 2 months 3 days 4 hours 5 minutes 6 seconds"),
+					},
+					expected: []map[string]interface{}{
+						{"name": "date", "type": "date", "value": "2023-05-01"},
+						{"name": "time", "type": "time", "value": "15:04:05"},
+						{"name": "interval", "type": "interval", "value": "1 year 2 months 3 days 4 hours 5 minutes 6 seconds"},
+					},
+				},
+			}
+
+			for _, tc := range testCases {
+				t.Run(tc.name, func(t *testing.T) {
+					mockNATSClient := new(MockNATSClient)
+
+					br := &replicator.BaseReplicator{
+						NATSClient: mockNATSClient,
+						Relations: map[uint32]*pglogrepl.RelationMessage{
+							1: {
+								RelationID:   1,
+								Namespace:    "public",
+								RelationName: "test_table",
+								Columns:      make([]*pglogrepl.RelationMessageColumn, len(tc.relationFields)),
+							},
+						},
+						Config: replicator.Config{Group: "test_pub"},
+					}
+
+					for i, field := range tc.relationFields {
+						br.Relations[1].Columns[i] = &pglogrepl.RelationMessageColumn{
+							Name:     field.name,
+							DataType: field.dataType,
+						}
+					}
+
+					msg := &pglogrepl.InsertMessage{
+						RelationID: 1,
+						Tuple: &pglogrepl.TupleData{
+							Columns: make([]*pglogrepl.TupleDataColumn, len(tc.tupleData)),
+						},
+					}
+
+					for i, data := range tc.tupleData {
+						msg.Tuple.Columns[i] = &pglogrepl.TupleDataColumn{Data: data}
+					}
+
+					mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+						var decodedMsg utils.CDCMessage
+						err := decodedMsg.UnmarshalBinary(data)
+						if err != nil {
+							t.Logf("Failed to unmarshal binary data: %v", err)
+							return false
+						}
+
+						assert.Equal(t, "INSERT", decodedMsg.Type)
+						assert.Equal(t, "public", decodedMsg.Schema)
+						assert.Equal(t, "test_table", decodedMsg.Table)
+
+						assert.Equal(t, len(tc.expected), len(decodedMsg.NewTuple.Columns))
+						for i, expectedValue := range tc.expected {
+							actualColumn := decodedMsg.NewTuple.Columns[i]
+							expectedType := expectedValue["type"].(string)
+							expectedVal := expectedValue["value"]
+
+							assert.Equal(t, expectedType, utils.OIDToString(decodedMsg.Columns[i].DataType), "Type mismatch for field %s", decodedMsg.Columns[i].Name)
+
+							switch expectedType {
+							case "int4", "int8":
+								assert.Equal(t, []byte(fmt.Sprintf("%d", expectedVal)), actualColumn.Data)
+							case "float8":
+								expectedFloat, _ := strconv.ParseFloat(string(actualColumn.Data), 64)
+								assert.InDelta(t, expectedVal, expectedFloat, 0.000001, "Float value mismatch for field %s", decodedMsg.Columns[i].Name)
+							case "bool":
+								if expectedVal.(bool) {
+									assert.Equal(t, []byte("true"), actualColumn.Data)
+								} else {
+									assert.Equal(t, []byte("false"), actualColumn.Data)
+								}
+							case "text", "varchar":
+								assert.Equal(t, []byte(expectedVal.(string)), actualColumn.Data)
+							case "jsonb":
+								assert.JSONEq(t, string(expectedVal.(json.RawMessage)), string(actualColumn.Data))
+							case "bytea":
+								assert.Equal(t, expectedVal, actualColumn.Data)
+							case "timestamptz":
+								expectedTime := expectedVal.(time.Time)
+								assert.Equal(t, []byte(expectedTime.Format("2006-01-02 15:04:05.999999Z07:00")), actualColumn.Data)
+							default:
+								assert.Equal(t, []byte(fmt.Sprintf("%v", expectedVal)), actualColumn.Data)
+							}
+						}
+
+						return true
+					})).Return(nil)
+
+					ctx := context.Background()
+					err := br.HandleInsertMessage(ctx, msg)
+					assert.NoError(t, err)
+
+					mockNATSClient.AssertExpectations(t)
+				})
+			}
 		})
 	})
 
 	t.Run("HandleUpdateMessage", func(t *testing.T) {
 		t.Run("Successful handling of UpdateMessage", func(t *testing.T) {
-			mockSink := new(MockSink)
-
+			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
-				Sink: mockSink,
+				NATSClient: mockNATSClient,
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -527,8 +639,7 @@ func TestBaseReplicator(t *testing.T) {
 						},
 					},
 				},
-				Buffer:     replicator.NewBuffer(1000, 5*time.Second),
-				RuleEngine: newTestRuleEngine(),
+				Config: replicator.Config{Group: "test_pub"},
 			}
 
 			msg := &pglogrepl.UpdateMessage{
@@ -547,120 +658,48 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			expected := map[string]interface{}{
-				"type":   "UPDATE",
-				"schema": "public",
-				"table":  "users",
-				"old_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-				"new_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "Jane Doe"},
-				},
-			}
+			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+				var decodedMsg utils.CDCMessage
+				err := decodedMsg.UnmarshalBinary(data)
+				if err != nil {
+					t.Logf("Failed to unmarshal binary data: %v", err)
+					return false
+				}
 
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
+				assert.Equal(t, "UPDATE", decodedMsg.Type)
+				assert.Equal(t, "public", decodedMsg.Schema)
+				assert.Equal(t, "users", decodedMsg.Table)
+				assert.Equal(t, msg.OldTuple, decodedMsg.OldTuple)
+				assert.Equal(t, msg.NewTuple, decodedMsg.NewTuple)
+
+				return true
 			})).Return(nil)
 
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleUpdateMessage(msg)
+			ctx := context.Background()
+			err := br.HandleUpdateMessage(ctx, msg)
 			assert.NoError(t, err)
 
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-
-		t.Run("Successful handling of UpdateMessage with rule engine", func(t *testing.T) {
-			mockSink := new(MockSink)
-			ruleEngine := newTestRuleEngine()
-
-			br := &replicator.BaseReplicator{
-				Sink:       mockSink,
-				RuleEngine: ruleEngine,
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					1: {
-						RelationID:   1,
-						Namespace:    "public",
-						RelationName: "users",
-						Columns: []*pglogrepl.RelationMessageColumn{
-							{Name: "id", DataType: pgtype.Int4OID},
-							{Name: "name", DataType: pgtype.TextOID},
-						},
-					},
-				},
-				Buffer: replicator.NewBuffer(1000, 5*time.Second),
-			}
-
-			msg := &pglogrepl.UpdateMessage{
-				RelationID: 1,
-				OldTuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("John Doe")},
-					},
-				},
-				NewTuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("Jane Doe")},
-					},
-				},
-			}
-
-			expected := map[string]interface{}{
-				"type":   "UPDATE",
-				"schema": "public",
-				"table":  "users",
-				"old_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-				"new_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "Jane Doe"},
-				},
-			}
-
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
-			})).Return(nil)
-
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleUpdateMessage(msg)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-
+			mockNATSClient.AssertExpectations(t)
 		})
 
 		t.Run("Unknown relation ID", func(t *testing.T) {
 			br := &replicator.BaseReplicator{
-				Relations:  make(map[uint32]*pglogrepl.RelationMessage),
-				RuleEngine: newTestRuleEngine(),
+				Relations: make(map[uint32]*pglogrepl.RelationMessage),
 			}
 
 			msg := &pglogrepl.UpdateMessage{RelationID: 999}
 
-			err := br.HandleUpdateMessage(msg)
+			ctx := context.Background()
+			err := br.HandleUpdateMessage(ctx, msg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})
 
-		t.Run("Update with nil OldTuple", func(t *testing.T) {
-			mockSink := new(MockSink)
+		t.Run("HandleUpdateMessage with nil OldTuple", func(t *testing.T) {
+			mockNATSClient := new(MockNATSClient)
 
 			br := &replicator.BaseReplicator{
-				Sink: mockSink,
+				NATSClient: mockNATSClient,
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -672,8 +711,7 @@ func TestBaseReplicator(t *testing.T) {
 						},
 					},
 				},
-				Buffer:     replicator.NewBuffer(1000, 5*time.Second),
-				RuleEngine: newTestRuleEngine(),
+				Config: replicator.Config{Group: "test_pub"},
 			}
 
 			msg := &pglogrepl.UpdateMessage{
@@ -687,94 +725,43 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			expected := map[string]interface{}{
-				"type":    "UPDATE",
-				"schema":  "public",
-				"table":   "users",
-				"old_row": map[string]utils.CDCValue{},
-				"new_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-			}
+			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+				var decodedMsg utils.CDCMessage
+				err := decodedMsg.UnmarshalBinary(data)
+				if err != nil {
+					t.Logf("Failed to unmarshal binary data: %v", err)
+					return false
+				}
 
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
+				assert.Equal(t, "UPDATE", decodedMsg.Type)
+				assert.Equal(t, "public", decodedMsg.Schema)
+				assert.Equal(t, "users", decodedMsg.Table)
+				assert.Nil(t, decodedMsg.OldTuple)
+				assert.NotNil(t, decodedMsg.NewTuple)
+				assert.Equal(t, msg.NewTuple, decodedMsg.NewTuple)
+
+				assert.Len(t, decodedMsg.Columns, 2)
+				assert.Equal(t, "id", decodedMsg.Columns[0].Name)
+				assert.Equal(t, uint32(pgtype.Int4OID), decodedMsg.Columns[0].DataType)
+				assert.Equal(t, "name", decodedMsg.Columns[1].Name)
+				assert.Equal(t, uint32(pgtype.TextOID), decodedMsg.Columns[1].DataType)
+
+				return true
 			})).Return(nil)
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
 
-			err := br.HandleUpdateMessage(msg)
+			ctx := context.Background()
+			err := br.HandleUpdateMessage(ctx, msg)
 			assert.NoError(t, err)
 
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-
-		t.Run("Update with nil NewTuple", func(t *testing.T) {
-			mockSink := new(MockSink)
-
-			br := &replicator.BaseReplicator{
-				Sink: mockSink,
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					1: {
-						RelationID:   1,
-						Namespace:    "public",
-						RelationName: "users",
-						Columns: []*pglogrepl.RelationMessageColumn{
-							{Name: "id", DataType: pgtype.Int4OID},
-							{Name: "name", DataType: pgtype.TextOID},
-						},
-					},
-				},
-				Buffer:     replicator.NewBuffer(1000, 5*time.Second),
-				RuleEngine: newTestRuleEngine(),
-			}
-
-			msg := &pglogrepl.UpdateMessage{
-				RelationID: 1,
-				OldTuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("John Doe")},
-					},
-				},
-				NewTuple: nil,
-			}
-
-			expected := map[string]interface{}{
-				"type":   "UPDATE",
-				"schema": "public",
-				"table":  "users",
-				"old_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-				"new_row": map[string]utils.CDCValue{},
-			}
-
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
-			})).Return(nil)
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleUpdateMessage(msg)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
+			mockNATSClient.AssertExpectations(t)
 		})
 	})
 
 	t.Run("HandleDeleteMessage", func(t *testing.T) {
 		t.Run("Successful handling of DeleteMessage", func(t *testing.T) {
-			mockSink := new(MockSink)
-
+			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
-				Sink: mockSink,
+				NATSClient: mockNATSClient,
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -786,8 +773,7 @@ func TestBaseReplicator(t *testing.T) {
 						},
 					},
 				},
-				Buffer:     replicator.NewBuffer(1000, 5*time.Second),
-				RuleEngine: newTestRuleEngine(),
+				Config: replicator.Config{Group: "test_pub"},
 			}
 
 			msg := &pglogrepl.DeleteMessage{
@@ -800,84 +786,28 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			expected := map[string]interface{}{
-				"type":   "DELETE",
-				"schema": "public",
-				"table":  "users",
-				"old_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-			}
+			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+				var decodedMsg utils.CDCMessage
+				err := decodedMsg.UnmarshalBinary(data)
+				if err != nil {
+					t.Logf("Failed to unmarshal binary data: %v", err)
+					return false
+				}
 
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
+				assert.Equal(t, "DELETE", decodedMsg.Type)
+				assert.Equal(t, "public", decodedMsg.Schema)
+				assert.Equal(t, "users", decodedMsg.Table)
+				assert.Equal(t, msg.OldTuple, decodedMsg.OldTuple)
+				assert.Nil(t, decodedMsg.NewTuple)
+
+				return true
 			})).Return(nil)
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
 
-			err := br.HandleDeleteMessage(msg)
+			ctx := context.Background()
+			err := br.HandleDeleteMessage(ctx, msg)
 			assert.NoError(t, err)
 
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-
-		t.Run("Successful handling of DeleteMessage with rule engine", func(t *testing.T) {
-			mockSink := new(MockSink)
-			ruleEngine := newTestRuleEngine()
-
-			br := &replicator.BaseReplicator{
-				Sink:       mockSink,
-				RuleEngine: ruleEngine,
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					1: {
-						RelationID:   1,
-						Namespace:    "public",
-						RelationName: "users",
-						Columns: []*pglogrepl.RelationMessageColumn{
-							{Name: "id", DataType: pgtype.Int4OID},
-							{Name: "name", DataType: pgtype.TextOID},
-						},
-					},
-				},
-				Buffer: replicator.NewBuffer(1000, 5*time.Second),
-			}
-
-			msg := &pglogrepl.DeleteMessage{
-				RelationID: 1,
-				OldTuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("John Doe")},
-					},
-				},
-			}
-
-			expected := map[string]interface{}{
-				"type":   "DELETE",
-				"schema": "public",
-				"table":  "users",
-				"old_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(1)},
-					"name": {Type: pgtype.TextOID, Value: "John Doe"},
-				},
-			}
-
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
-			})).Return(nil)
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleDeleteMessage(msg)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-
+			mockNATSClient.AssertExpectations(t)
 		})
 
 		t.Run("Unknown relation ID", func(t *testing.T) {
@@ -887,120 +817,198 @@ func TestBaseReplicator(t *testing.T) {
 
 			msg := &pglogrepl.DeleteMessage{RelationID: 999}
 
-			err := br.HandleDeleteMessage(msg)
+			ctx := context.Background()
+			err := br.HandleDeleteMessage(ctx, msg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})
 	})
 
-	t.Run("ConvertTupleDataToMap", func(t *testing.T) {
-		br := &replicator.BaseReplicator{
-			Logger: zerolog.New(ioutil.Discard),
-		}
+	t.Run("HandleCommitMessage", func(t *testing.T) {
+		t.Run("Successful handling of CommitMessage", func(t *testing.T) {
+			mockNATSClient := new(MockNATSClient)
 
-		testCases := []struct {
-			name     string
-			relation *pglogrepl.RelationMessage
-			tuple    *pglogrepl.TupleData
-			expected map[string]utils.CDCValue
-		}{
-			{
-				name: "With various data types",
-				relation: &pglogrepl.RelationMessage{
-					Columns: []*pglogrepl.RelationMessageColumn{
-						{Name: "id", DataType: pgtype.Int4OID},
-						{Name: "name", DataType: pgtype.TextOID},
-						{Name: "active", DataType: pgtype.BoolOID},
-						{Name: "score", DataType: pgtype.Float8OID},
-						{Name: "created_at", DataType: pgtype.TimestamptzOID},
-						{Name: "data", DataType: pgtype.JSONBOID},
-					},
+			br := &replicator.BaseReplicator{
+				NATSClient: mockNATSClient,
+			}
+
+			msg := &pglogrepl.CommitMessage{
+				CommitTime:        time.Now(),
+				TransactionEndLSN: 12345,
+			}
+
+			mockNATSClient.On("SaveState", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
+
+			ctx := context.Background()
+			err := br.HandleCommitMessage(ctx, msg)
+			assert.NoError(t, err)
+
+			mockNATSClient.AssertExpectations(t)
+		})
+	})
+
+	t.Run("PublishToNATS", func(t *testing.T) {
+		t.Run("Successful publishing to NATS", func(t *testing.T) {
+			mockNATSClient := new(MockNATSClient)
+
+			br := &replicator.BaseReplicator{
+				NATSClient: mockNATSClient,
+				Config: replicator.Config{
+					Group: "test_group",
 				},
-				tuple: &pglogrepl.TupleData{
+			}
+
+			data := utils.CDCMessage{
+				Type:   "INSERT",
+				Schema: "public",
+				Table:  "users",
+				Columns: []*pglogrepl.RelationMessageColumn{
+					{Name: "id", DataType: pgtype.Int4OID},
+					{Name: "name", DataType: pgtype.TextOID},
+				},
+				NewTuple: &pglogrepl.TupleData{
 					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
+						{Data: []byte{0, 0, 0, 1}}, // int4 representation of 1
 						{Data: []byte("John Doe")},
-						{Data: []byte("t")},
-						{Data: []byte("9.5")},
-						{Data: []byte("2023-04-13 10:30:00+00")},
-						{Data: []byte(`{"key": "value"}`)},
 					},
 				},
-				expected: map[string]utils.CDCValue{
-					"id":         utils.CDCValue{Type: pgtype.Int4OID, Value: int64(1)},
-					"name":       utils.CDCValue{Type: pgtype.TextOID, Value: "John Doe"},
-					"active":     utils.CDCValue{Type: pgtype.BoolOID, Value: "t"},
-					"score":      utils.CDCValue{Type: pgtype.Float8OID, Value: "9.5"},
-					"created_at": utils.CDCValue{Type: pgtype.TimestamptzOID, Value: "2023-04-13T10:30:00Z"},
-					"data":       utils.CDCValue{Type: pgtype.JSONBOID, Value: `{"key": "value"}`},
-				},
-			},
-			{
-				name: "With various timestamp formats",
-				relation: &pglogrepl.RelationMessage{
-					Columns: []*pglogrepl.RelationMessageColumn{
-						{Name: "timestamp_with_tz", DataType: pgtype.TimestamptzOID},
-						{Name: "timestamp_without_tz", DataType: pgtype.TimestampOID},
-					},
-				},
-				tuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("2024-08-17 17:11:24.259862+00")},
-						{Data: []byte("2024-08-17 17:11:24.259862")},
-					},
-				},
-				expected: map[string]utils.CDCValue{
-					"timestamp_with_tz":    utils.CDCValue{Type: pgtype.TimestamptzOID, Value: "2024-08-17T17:11:24.259862Z"},
-					"timestamp_without_tz": utils.CDCValue{Type: pgtype.TimestampOID, Value: "2024-08-17T17:11:24.259862Z"},
-				},
-			},
-		}
+			}
 
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := br.ConvertTupleDataToMap(tc.relation, tc.tuple)
-				assert.Equal(t, tc.expected, result)
-			})
-		}
+			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+				var decodedMsg utils.CDCMessage
+				err := decodedMsg.UnmarshalBinary(data)
+				if err != nil {
+					t.Logf("Failed to unmarshal binary data: %v", err)
+					return false
+				}
+
+				assert.Equal(t, "INSERT", decodedMsg.Type)
+				assert.Equal(t, "public", decodedMsg.Schema)
+				assert.Equal(t, "users", decodedMsg.Table)
+
+				assert.Len(t, decodedMsg.Columns, 2)
+				assert.Equal(t, "id", decodedMsg.Columns[0].Name)
+				assert.Equal(t, uint32(pgtype.Int4OID), decodedMsg.Columns[0].DataType)
+				assert.Equal(t, "name", decodedMsg.Columns[1].Name)
+				assert.Equal(t, uint32(pgtype.TextOID), decodedMsg.Columns[1].DataType)
+
+				assert.NotNil(t, decodedMsg.NewTuple)
+				assert.Len(t, decodedMsg.NewTuple.Columns, 2)
+				assert.Equal(t, []byte{0, 0, 0, 1}, decodedMsg.NewTuple.Columns[0].Data)
+				assert.Equal(t, []byte("John Doe"), decodedMsg.NewTuple.Columns[1].Data)
+
+				return true
+			})).Return(nil)
+
+			ctx := context.Background()
+			err := br.PublishToNATS(ctx, data)
+			assert.NoError(t, err)
+
+			mockNATSClient.AssertExpectations(t)
+		})
+
+		t.Run("Error publishing to NATS", func(t *testing.T) {
+			mockNATSClient := new(MockNATSClient)
+
+			br := &replicator.BaseReplicator{
+				NATSClient: mockNATSClient,
+				Config: replicator.Config{
+					Group: "test_group",
+				},
+			}
+
+			data := utils.CDCMessage{
+				Type:   "INSERT",
+				Schema: "public",
+				Table:  "users",
+				Columns: []*pglogrepl.RelationMessageColumn{
+					{Name: "id", DataType: pgtype.Int4OID},
+					{Name: "name", DataType: pgtype.TextOID},
+				},
+				NewTuple: &pglogrepl.TupleData{
+					Columns: []*pglogrepl.TupleDataColumn{
+						{Data: []byte{0, 0, 0, 1}}, // int4 representation of 1
+						{Data: []byte("John Doe")},
+					},
+				},
+			}
+
+			mockNATSClient.On("PublishMessage", mock.Anything, mock.Anything).Return(errors.New("failed to publish message"))
+
+			ctx := context.Background()
+			err := br.PublishToNATS(ctx, data)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to publish message")
+
+			mockNATSClient.AssertExpectations(t)
+		})
+	})
+
+	t.Run("AddPrimaryKeyInfo", func(t *testing.T) {
+		t.Run("Successful addition of primary key info", func(t *testing.T) {
+			br := &replicator.BaseReplicator{
+				TableDetails: map[string][]string{
+					"public.users": {"id"},
+				},
+			}
+
+			message := &utils.CDCMessage{
+				Schema: "public",
+				Table:  "users",
+				Columns: []*pglogrepl.RelationMessageColumn{
+					{Name: "id", DataType: pgtype.Int4OID},
+					{Name: "name", DataType: pgtype.TextOID},
+				},
+				NewTuple: &pglogrepl.TupleData{
+					Columns: []*pglogrepl.TupleDataColumn{
+						{Data: []byte{0, 0, 0, 1}}, // int4 representation of 1
+						{Data: []byte("John Doe")},
+					},
+				},
+			}
+
+			expected := &utils.CDCMessage{
+				Schema: "public",
+				Table:  "users",
+				Columns: []*pglogrepl.RelationMessageColumn{
+					{Name: "id", DataType: pgtype.Int4OID},
+					{Name: "name", DataType: pgtype.TextOID},
+				},
+				NewTuple: &pglogrepl.TupleData{
+					Columns: []*pglogrepl.TupleDataColumn{
+						{Data: []byte{0, 0, 0, 1}}, // int4 representation of 1
+						{Data: []byte("John Doe")},
+					},
+				},
+				PrimaryKeyColumn: "id",
+			}
+
+			br.AddPrimaryKeyInfo(message, "public.users")
+			assert.Equal(t, expected, message)
+		})
 	})
 
 	t.Run("SendStandbyStatusUpdate", func(t *testing.T) {
-		t.Run("Successful sending of status update", func(t *testing.T) {
-			mockSink := new(MockSink)
+		t.Run("Successful sending of standby status update", func(t *testing.T) {
 			mockReplicationConn := new(MockReplicationConnection)
+			mockReplicationConn.On("SendStandbyStatusUpdate", mock.Anything, mock.Anything).Return(nil)
 
 			br := &replicator.BaseReplicator{
-				Sink:            mockSink,
 				ReplicationConn: mockReplicationConn,
-				LastLSN:         pglogrepl.LSN(100),
-				Buffer:          replicator.NewBuffer(1000, 5*time.Second),
-				Logger:          zerolog.New(ioutil.Discard),
 			}
-
-			mockReplicationConn.On("SendStandbyStatusUpdate",
-				mock.Anything,
-				mock.MatchedBy(func(update pglogrepl.StandbyStatusUpdate) bool {
-					return update.WALWritePosition == pglogrepl.LSN(101) &&
-						update.WALFlushPosition == pglogrepl.LSN(101) &&
-						update.WALApplyPosition == pglogrepl.LSN(101) &&
-						!update.ReplyRequested
-				}),
-			).Return(nil)
 
 			err := br.SendStandbyStatusUpdate(context.Background())
 			assert.NoError(t, err)
+
 			mockReplicationConn.AssertExpectations(t)
 		})
 
 		t.Run("Error occurs while sending status update", func(t *testing.T) {
-			mockSink := new(MockSink)
 			mockReplicationConn := new(MockReplicationConnection)
 
 			br := &replicator.BaseReplicator{
-				Sink:            mockSink,
 				ReplicationConn: mockReplicationConn,
 				LastLSN:         pglogrepl.LSN(100),
-				Buffer:          replicator.NewBuffer(1000, 5*time.Second),
 				Logger:          zerolog.New(ioutil.Discard),
 			}
 
@@ -1014,12 +1022,44 @@ func TestBaseReplicator(t *testing.T) {
 			assert.Contains(t, err.Error(), "failed to send standby status update")
 			mockReplicationConn.AssertExpectations(t)
 		})
+	})
 
+	t.Run("SendFinalStandbyStatusUpdate", func(t *testing.T) {
+		t.Run("Successful sending of final standby status update", func(t *testing.T) {
+			mockReplicationConn := new(MockReplicationConnection)
+			mockReplicationConn.On("SendStandbyStatusUpdate", mock.Anything, mock.Anything).Return(nil)
+
+			br := &replicator.BaseReplicator{
+				ReplicationConn: mockReplicationConn,
+			}
+
+			err := br.SendFinalStandbyStatusUpdate()
+			assert.NoError(t, err)
+
+			mockReplicationConn.AssertExpectations(t)
+		})
+
+		t.Run("Error sending final standby status update", func(t *testing.T) {
+			mockReplicationConn := new(MockReplicationConnection)
+			mockReplicationConn.On("SendStandbyStatusUpdate", mock.Anything, mock.Anything).Return(errors.New("send error"))
+
+			br := &replicator.BaseReplicator{
+				ReplicationConn: mockReplicationConn,
+			}
+
+			err := br.SendFinalStandbyStatusUpdate()
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to send standby")
+
+			mockReplicationConn.AssertExpectations(t)
+		})
 	})
 
 	t.Run("CreateReplicationSlot", func(t *testing.T) {
-		t.Run("Replication slot already exists", func(t *testing.T) {
+		t.Run("Slot already exists", func(t *testing.T) {
 			mockStandardConn := new(MockStandardConnection)
+			mockReplicationConn := new(MockReplicationConnection)
+
 			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", mock.Anything).
 				Return(MockRow{
 					scanFunc: func(dest ...interface{}) error {
@@ -1029,18 +1069,24 @@ func TestBaseReplicator(t *testing.T) {
 				})
 
 			br := &replicator.BaseReplicator{
-				StandardConn: mockStandardConn,
-				Buffer:       replicator.NewBuffer(1000, 5*time.Second),
-				Config:       replicator.Config{Group: "existing_slot"},
+				StandardConn:    mockStandardConn,
+				ReplicationConn: mockReplicationConn,
+				Config: replicator.Config{
+					Group: "test_group",
+				},
 			}
 
 			err := br.CreateReplicationSlot(context.Background())
 			assert.NoError(t, err)
+
 			mockStandardConn.AssertExpectations(t)
+			mockReplicationConn.AssertExpectations(t)
 		})
 
-		t.Run("Replication slot doesn't exist and is created successfully", func(t *testing.T) {
+		t.Run("Slot created successfully", func(t *testing.T) {
 			mockStandardConn := new(MockStandardConnection)
+			mockReplicationConn := new(MockReplicationConnection)
+
 			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", mock.Anything).
 				Return(MockRow{
 					scanFunc: func(dest ...interface{}) error {
@@ -1049,701 +1095,120 @@ func TestBaseReplicator(t *testing.T) {
 					},
 				})
 
-			mockReplicationConn := new(MockReplicationConnection)
-			mockReplicationConn.On("CreateReplicationSlot", mock.Anything, mock.Anything).Return(pglogrepl.CreateReplicationSlotResult{}, nil)
+			mockReplicationConn.On("CreateReplicationSlot", mock.Anything, mock.Anything).
+				Return(pglogrepl.CreateReplicationSlotResult{
+					SlotName:        "test_group_publication",
+					ConsistentPoint: "0/0",
+					SnapshotName:    "snapshot_name",
+				}, nil)
 
 			br := &replicator.BaseReplicator{
 				StandardConn:    mockStandardConn,
 				ReplicationConn: mockReplicationConn,
-				Buffer:          replicator.NewBuffer(1000, 5*time.Second),
-				Config:          replicator.Config{Group: "new_slot"},
+				Config: replicator.Config{
+					Group: "test_group",
+				},
+				Logger: zerolog.Nop(),
 			}
 
 			err := br.CreateReplicationSlot(context.Background())
 			assert.NoError(t, err)
+
 			mockStandardConn.AssertExpectations(t)
 			mockReplicationConn.AssertExpectations(t)
 		})
 
-		t.Run("Error occurs while checking replication slot existence", func(t *testing.T) {
+		t.Run("Error creating slot", func(t *testing.T) {
 			mockStandardConn := new(MockStandardConnection)
+			mockReplicationConn := new(MockReplicationConnection)
+
 			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", mock.Anything).
 				Return(MockRow{
 					scanFunc: func(dest ...interface{}) error {
-						return errors.New("query error")
+						*dest[0].(*bool) = false
+						return nil
 					},
 				})
 
+			mockReplicationConn.On("CreateReplicationSlot", mock.Anything, mock.Anything).
+				Return(pglogrepl.CreateReplicationSlotResult{}, errors.New("create error"))
+
 			br := &replicator.BaseReplicator{
-				StandardConn: mockStandardConn,
-				Config:       replicator.Config{Group: "error_slot"},
-				Buffer:       replicator.NewBuffer(1000, 5*time.Second),
+				StandardConn:    mockStandardConn,
+				ReplicationConn: mockReplicationConn,
+				Config: replicator.Config{
+					Group: "test_group",
+				},
+				Logger: zerolog.Nop(),
 			}
 
 			err := br.CreateReplicationSlot(context.Background())
 			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to check replication slot")
+			assert.Contains(t, err.Error(), "failed to create replication slot")
+
+			mockStandardConn.AssertExpectations(t)
+			mockReplicationConn.AssertExpectations(t)
+		})
+	})
+
+	t.Run("CheckReplicationSlotExists", func(t *testing.T) {
+		t.Run("Slot exists", func(t *testing.T) {
+			mockStandardConn := new(MockStandardConnection)
+			mockStandardConn.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(MockRow{
+				scanFunc: func(dest ...interface{}) error {
+					*dest[0].(*bool) = true
+					return nil
+				},
+			})
+
+			br := &replicator.BaseReplicator{
+				StandardConn: mockStandardConn,
+			}
+
+			exists, err := br.CheckReplicationSlotExists("test_slot")
+			assert.NoError(t, err)
+			assert.True(t, exists)
+
+			mockStandardConn.AssertExpectations(t)
+		})
+
+		t.Run("Slot does not exist", func(t *testing.T) {
+			mockStandardConn := new(MockStandardConnection)
+			mockStandardConn.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(MockRow{
+				scanFunc: func(dest ...interface{}) error {
+					*dest[0].(*bool) = false
+					return nil
+				},
+			})
+
+			br := &replicator.BaseReplicator{
+				StandardConn: mockStandardConn,
+			}
+
+			exists, err := br.CheckReplicationSlotExists("test_slot")
+			assert.NoError(t, err)
+			assert.False(t, exists)
+
+			mockStandardConn.AssertExpectations(t)
+		})
+
+		t.Run("Error checking slot existence", func(t *testing.T) {
+			mockStandardConn := new(MockStandardConnection)
+			mockStandardConn.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(MockRow{
+				scanFunc: func(dest ...interface{}) error {
+					return errors.New("query error")
+				},
+			})
+
+			br := &replicator.BaseReplicator{
+				StandardConn: mockStandardConn,
+			}
+
+			_, err := br.CheckReplicationSlotExists("test_slot")
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "error checking replication slot")
+
 			mockStandardConn.AssertExpectations(t)
 		})
 	})
-
-	t.Run("Integration with RuleEngine", func(t *testing.T) {
-		t.Run("Transform Rule", func(t *testing.T) {
-			mockSink := new(MockSink)
-			ruleEngine := newTestRuleEngine()
-
-			config := rules.Config{
-
-				Tables: map[string][]rules.RuleConfig{
-					"users": {
-						{
-							Type:   "transform",
-							Column: "email",
-							Parameters: map[string]interface{}{
-								"type":      "mask",
-								"mask_char": "*",
-							},
-						},
-					},
-				},
-			}
-			err := ruleEngine.LoadRules(config)
-			assert.NoError(t, err)
-
-			br := &replicator.BaseReplicator{
-				Sink:       mockSink,
-				RuleEngine: ruleEngine,
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					1: {
-						RelationID:   1,
-						Namespace:    "public",
-						RelationName: "users",
-						Columns: []*pglogrepl.RelationMessageColumn{
-							{Name: "id", DataType: pgtype.Int4OID},
-							{Name: "name", DataType: pgtype.TextOID},
-							{Name: "email", DataType: pgtype.TextOID},
-						},
-					},
-				},
-				Buffer: replicator.NewBuffer(1000, 5*time.Second),
-			}
-
-			msg := &pglogrepl.InsertMessage{
-				RelationID: 1,
-				Tuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("John Doe")},
-						{Data: []byte("john@example.com")},
-					},
-				},
-			}
-			mockSink.On("WriteBatch", mock.AnythingOfType("[]interface {}")).Return(nil).Run(func(args mock.Arguments) {
-				data := args.Get(0).([]interface{})
-				assert.Len(t, data, 1, "Expected one batch of data")
-
-				result, ok := data[0].(map[string]interface{})
-				assert.True(t, ok, "Expected data to be a map[string]interface{}")
-
-				assert.Equal(t, "INSERT", result["type"])
-				assert.Equal(t, "public", result["schema"])
-				assert.Equal(t, "users", result["table"])
-
-				newRow, ok := result["new_row"].(map[string]utils.CDCValue)
-				assert.True(t, ok, "new_row should be a map")
-
-				email, ok := newRow["email"]
-				assert.True(t, ok, "email should be present in new_row")
-				assert.Equal(t, pgtype.TextOID, int(email.Type), "email type should be text")
-
-				maskedEmail, ok := email.Value.(string)
-				assert.True(t, ok, "email value should be a string")
-				assert.Equal(t, "j**************m", maskedEmail, "Email should be masked")
-			})
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err = br.HandleInsertMessage(msg)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-
-		t.Run("Filter Rule", func(t *testing.T) {
-			mockSink := new(MockSink)
-			ruleEngine := newTestRuleEngine()
-
-			config := rules.Config{
-				Tables: map[string][]rules.RuleConfig{
-					"users": {
-						{
-							Type:   "filter",
-							Column: "age",
-							Parameters: map[string]interface{}{
-								"operator": "gt",
-								"value":    18,
-							},
-						},
-					},
-				},
-			}
-			err := ruleEngine.LoadRules(config)
-			assert.NoError(t, err)
-
-			br := &replicator.BaseReplicator{
-				Sink:       mockSink,
-				RuleEngine: ruleEngine,
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					1: {
-						RelationID:   1,
-						Namespace:    "public",
-						RelationName: "users",
-						Columns: []*pglogrepl.RelationMessageColumn{
-							{Name: "id", DataType: pgtype.Int4OID},
-							{Name: "name", DataType: pgtype.TextOID},
-							{Name: "age", DataType: pgtype.Int4OID},
-						},
-					},
-				},
-				Buffer: replicator.NewBuffer(1000, 5*time.Second),
-			}
-
-			// This message should be filtered out
-			msg1 := &pglogrepl.InsertMessage{
-				RelationID: 1,
-				Tuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("John Doe")},
-						{Data: []byte("17")},
-					},
-				},
-			}
-
-			// This message should pass the filter
-			msg2 := &pglogrepl.InsertMessage{
-				RelationID: 1,
-				Tuple: &pglogrepl.TupleData{
-					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("2")},
-						{Data: []byte("Jane Doe")},
-						{Data: []byte("21")},
-					},
-				},
-			}
-
-			expected := map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "users",
-				"new_row": map[string]utils.CDCValue{
-					"id":   {Type: pgtype.Int4OID, Value: int64(2)},
-					"name": {Type: pgtype.TextOID, Value: "Jane Doe"},
-					"age":  {Type: pgtype.Int4OID, Value: int64(21)},
-				},
-			}
-
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], expected)
-			})).Return(nil)
-
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err = br.HandleInsertMessage(msg1)
-			assert.NoError(t, err)
-
-			err = br.HandleInsertMessage(msg2)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-	})
-}
-
-func TestConvertTupleDataToMap(t *testing.T) {
-	testCases := []struct {
-		name     string
-		relation *pglogrepl.RelationMessage
-		tuple    *pglogrepl.TupleData
-		expected map[string]utils.CDCValue
-	}{
-		{
-			name: "With various data types",
-			relation: &pglogrepl.RelationMessage{
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "name", DataType: pgtype.TextOID},
-					{Name: "active", DataType: pgtype.BoolOID},
-					{Name: "score", DataType: pgtype.Float8OID},
-					{Name: "created_at", DataType: pgtype.TimestamptzOID},
-					{Name: "data", DataType: pgtype.JSONBOID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("John Doe")},
-					{Data: []byte("t")},
-					{Data: []byte("9.5")},
-					{Data: []byte("2023-04-13 10:30:00+00")},
-					{Data: []byte(`{"key": "value"}`)},
-				},
-			},
-			expected: map[string]utils.CDCValue{
-				"id":         utils.CDCValue{Type: pgtype.Int4OID, Value: int64(1)},
-				"name":       utils.CDCValue{Type: pgtype.TextOID, Value: "John Doe"},
-				"active":     utils.CDCValue{Type: pgtype.BoolOID, Value: "t"},
-				"score":      utils.CDCValue{Type: pgtype.Float8OID, Value: "9.5"},
-				"created_at": utils.CDCValue{Type: pgtype.TimestamptzOID, Value: "2023-04-13T10:30:00Z"},
-				"data":       utils.CDCValue{Type: pgtype.JSONBOID, Value: `{"key": "value"}`},
-			},
-		},
-		{
-			name: "With various timestamp formats",
-			relation: &pglogrepl.RelationMessage{
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "timestamp_with_tz", DataType: pgtype.TimestamptzOID},
-					{Name: "timestamp_without_tz", DataType: pgtype.TimestampOID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("2024-08-17 17:11:24.259862+00")},
-					{Data: []byte("2024-08-17 17:11:24.259862")},
-				},
-			},
-			expected: map[string]utils.CDCValue{
-				"timestamp_with_tz":    utils.CDCValue{Type: pgtype.TimestamptzOID, Value: "2024-08-17T17:11:24.259862Z"},
-				"timestamp_without_tz": utils.CDCValue{Type: pgtype.TimestampOID, Value: "2024-08-17T17:11:24.259862Z"},
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			br := &replicator.BaseReplicator{
-				Logger: zerolog.New(ioutil.Discard),
-			}
-
-			result := br.ConvertTupleDataToMap(tc.relation, tc.tuple)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-func TestHandleInsertMessageWithDifferentDataTypes(t *testing.T) {
-	testCases := []struct {
-		name     string
-		relation *pglogrepl.RelationMessage
-		tuple    *pglogrepl.TupleData
-		expected map[string]interface{}
-	}{
-		{
-			name: "Basic types",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   1,
-				Namespace:    "public",
-				RelationName: "users",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "name", DataType: pgtype.TextOID},
-					{Name: "active", DataType: pgtype.BoolOID},
-					{Name: "score", DataType: pgtype.Float8OID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("John Doe")},
-					{Data: []byte("t")},
-					{Data: []byte("9.5")},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "users",
-				"new_row": map[string]utils.CDCValue{
-					"id":     {Type: pgtype.Int4OID, Value: int64(1)},
-					"name":   {Type: pgtype.TextOID, Value: "John Doe"},
-					"active": {Type: pgtype.BoolOID, Value: "t"},
-					"score":  {Type: pgtype.Float8OID, Value: "9.5"},
-				},
-			},
-		},
-		{
-			name: "With JSONB and binary data",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   2,
-				Namespace:    "public",
-				RelationName: "complex_data",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "data", DataType: pgtype.JSONBOID},
-					{Name: "binary_data", DataType: pgtype.ByteaOID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte(`{"key": "value", "nested": {"num": 42}}`)},
-					{Data: []byte("Hello")},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "complex_data",
-				"new_row": map[string]utils.CDCValue{
-					"id":          {Type: pgtype.Int4OID, Value: int64(1)},
-					"data":        {Type: pgtype.JSONBOID, Value: `{"key": "value", "nested": {"num": 42}}`},
-					"binary_data": {Type: pgtype.ByteaOID, Value: "SGVsbG8="},
-				},
-			},
-		},
-		{
-			name: "With null values",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   4,
-				Namespace:    "public",
-				RelationName: "nullable_data",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "nullable_text", DataType: pgtype.TextOID},
-					{Name: "nullable_int", DataType: pgtype.Int4OID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: nil},
-					{Data: nil},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "nullable_data",
-				"new_row": map[string]utils.CDCValue{
-					"id":            {Type: pgtype.Int4OID, Value: int64(1)},
-					"nullable_text": {Type: pgtype.TextOID, Value: nil},
-					"nullable_int":  {Type: pgtype.Int4OID, Value: nil},
-				},
-			},
-		},
-		{
-			name: "With various timestamp formats",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   3,
-				Namespace:    "public",
-				RelationName: "timestamp_data",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "timestamp_with_tz", DataType: pgtype.TimestamptzOID},
-					{Name: "timestamp_without_tz", DataType: pgtype.TimestampOID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("2024-08-17 17:11:24.259862+00")},
-					{Data: []byte("2024-08-17 17:11:24.259862")},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "timestamp_data",
-				"new_row": map[string]utils.CDCValue{
-					"timestamp_with_tz":    {Type: pgtype.TimestamptzOID, Value: "2024-08-17T17:11:24.259862Z"},
-					"timestamp_without_tz": {Type: pgtype.TimestampOID, Value: "2024-08-17T17:11:24.259862Z"},
-				},
-			},
-		},
-		{
-			name: "With extreme integer values",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   5,
-				Namespace:    "public",
-				RelationName: "extreme_integers",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "big_int", DataType: pgtype.Int8OID},
-					{Name: "small_int", DataType: pgtype.Int2OID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("9223372036854775807")}, // Max int64
-					{Data: []byte("-32768")},              // Min int16
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "extreme_integers",
-				"new_row": map[string]utils.CDCValue{
-					"id":        {Type: pgtype.Int4OID, Value: int64(1)},
-					"big_int":   {Type: pgtype.Int8OID, Value: int64(9223372036854775807)},
-					"small_int": {Type: pgtype.Int2OID, Value: int64(-32768)},
-				},
-			},
-		},
-		{
-			name: "With complex JSON data",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   7,
-				Namespace:    "public",
-				RelationName: "complex_json",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "json_data", DataType: pgtype.JSONBOID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte(`{"array": [1, 2, 3], "nested": {"key": "value"}, "null": null}`)},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "complex_json",
-				"new_row": map[string]utils.CDCValue{
-					"id":        {Type: pgtype.Int4OID, Value: int64(1)},
-					"json_data": {Type: pgtype.JSONBOID, Value: `{"array": [1, 2, 3], "nested": {"key": "value"}, "null": null}`},
-				},
-			},
-		},
-		{
-			name: "With invalid JSON data",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   8,
-				Namespace:    "public",
-				RelationName: "invalid_json",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "json_data", DataType: pgtype.JSONBOID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte(`{"invalid": json}`)},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "invalid_json",
-				"new_row": map[string]utils.CDCValue{
-					"id":        {Type: pgtype.Int4OID, Value: int64(1)},
-					"json_data": {Type: pgtype.JSONBOID, Value: `{"invalid": json}`},
-				},
-			},
-		},
-		{
-			name: "With special float values",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   6,
-				Namespace:    "public",
-				RelationName: "special_floats",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "float_normal", DataType: pgtype.Float8OID},
-					{Name: "float_nan", DataType: pgtype.Float8OID},
-					{Name: "float_inf", DataType: pgtype.Float8OID},
-					{Name: "float_neg_inf", DataType: pgtype.Float8OID},
-				},
-			},
-			tuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("3.14159")},
-					{Data: []byte("NaN")},
-					{Data: []byte("Infinity")},
-					{Data: []byte("-Infinity")},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "INSERT",
-				"schema": "public",
-				"table":  "special_floats",
-				"new_row": map[string]utils.CDCValue{
-					"id":            {Type: pgtype.Int4OID, Value: int64(1)},
-					"float_normal":  {Type: pgtype.Float8OID, Value: "3.14159"},
-					"float_nan":     {Type: pgtype.Float8OID, Value: "NaN"},
-					"float_inf":     {Type: pgtype.Float8OID, Value: "Infinity"},
-					"float_neg_inf": {Type: pgtype.Float8OID, Value: "-Infinity"},
-				},
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			mockSink := new(MockSink)
-			br := &replicator.BaseReplicator{
-				Logger: zerolog.New(ioutil.Discard),
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					tc.relation.RelationID: tc.relation,
-				},
-				Sink:       mockSink,
-				Buffer:     replicator.NewBuffer(1000, 5*time.Second),
-				RuleEngine: newTestRuleEngine(),
-			}
-
-			msg := &pglogrepl.InsertMessage{
-				RelationID: tc.relation.RelationID,
-				Tuple:      tc.tuple,
-			}
-
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], tc.expected)
-			})).Return(nil)
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleInsertMessage(msg)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-	}
-}
-func TestHandleUpdateMessageWithDifferentDataTypes(t *testing.T) {
-	testCases := []struct {
-		name     string
-		relation *pglogrepl.RelationMessage
-		oldTuple *pglogrepl.TupleData
-		newTuple *pglogrepl.TupleData
-		expected map[string]interface{}
-	}{
-		{
-			name: "Basic types update",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   1,
-				Namespace:    "public",
-				RelationName: "users",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "name", DataType: pgtype.TextOID},
-					{Name: "active", DataType: pgtype.BoolOID},
-					{Name: "score", DataType: pgtype.Float8OID},
-				},
-			},
-			oldTuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("John Doe")},
-					{Data: []byte("t")},
-					{Data: []byte("9.5")},
-				},
-			},
-			newTuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("John Smith")},
-					{Data: []byte("f")},
-					{Data: []byte("8.5")},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "UPDATE",
-				"schema": "public",
-				"table":  "users",
-				"old_row": map[string]utils.CDCValue{
-					"id":     {Type: pgtype.Int4OID, Value: int64(1)},
-					"name":   {Type: pgtype.TextOID, Value: "John Doe"},
-					"active": {Type: pgtype.BoolOID, Value: "t"},
-					"score":  {Type: pgtype.Float8OID, Value: "9.5"},
-				},
-				"new_row": map[string]utils.CDCValue{
-					"id":     {Type: pgtype.Int4OID, Value: int64(1)},
-					"name":   {Type: pgtype.TextOID, Value: "John Smith"},
-					"active": {Type: pgtype.BoolOID, Value: "f"},
-					"score":  {Type: pgtype.Float8OID, Value: "8.5"},
-				},
-			},
-		},
-		{
-			name: "Update with special float values",
-			relation: &pglogrepl.RelationMessage{
-				RelationID:   2,
-				Namespace:    "public",
-				RelationName: "special_floats",
-				Columns: []*pglogrepl.RelationMessageColumn{
-					{Name: "id", DataType: pgtype.Int4OID},
-					{Name: "float_value", DataType: pgtype.Float8OID},
-				},
-			},
-			oldTuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("3.14159")},
-				},
-			},
-			newTuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte("1")},
-					{Data: []byte("NaN")},
-				},
-			},
-			expected: map[string]interface{}{
-				"type":   "UPDATE",
-				"schema": "public",
-				"table":  "special_floats",
-				"old_row": map[string]utils.CDCValue{
-					"id":          {Type: pgtype.Int4OID, Value: int64(1)},
-					"float_value": {Type: pgtype.Float8OID, Value: "3.14159"},
-				},
-				"new_row": map[string]utils.CDCValue{
-					"id":          {Type: pgtype.Int4OID, Value: int64(1)},
-					"float_value": {Type: pgtype.Float8OID, Value: "NaN"},
-				},
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			mockSink := new(MockSink)
-			br := &replicator.BaseReplicator{
-				Logger: zerolog.New(ioutil.Discard),
-				Relations: map[uint32]*pglogrepl.RelationMessage{
-					tc.relation.RelationID: tc.relation,
-				},
-				Sink:       mockSink,
-				Buffer:     replicator.NewBuffer(1000, 5*time.Second),
-				RuleEngine: newTestRuleEngine(),
-			}
-
-			msg := &pglogrepl.UpdateMessage{
-				RelationID: tc.relation.RelationID,
-				OldTuple:   tc.oldTuple,
-				NewTuple:   tc.newTuple,
-			}
-
-			mockSink.On("WriteBatch", mock.MatchedBy(func(data []interface{}) bool {
-				return len(data) == 1 && reflect.DeepEqual(data[0], tc.expected)
-			})).Return(nil)
-
-			mockSink.On("SetLastLSN", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
-
-			err := br.HandleUpdateMessage(msg)
-			assert.NoError(t, err)
-
-			err = br.FlushBuffer()
-			assert.NoError(t, err)
-
-			mockSink.AssertExpectations(t)
-		})
-	}
 }

@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"strings"
 	"time"
+
+	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgtype"
+	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 type DDLReplicator struct {
@@ -164,7 +168,6 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	var events []interface{}
 	var processedIDs []int
 	seenCommands := make(map[string]bool)
 
@@ -191,18 +194,32 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 			schema, table = "public", ""
 		}
 
-		event := map[string]interface{}{
-			"type":            "DDL",
-			"event_type":      eventType,
-			"object_type":     objectType,
-			"object_identity": objectIdentity,
-			"schema":          schema,
-			"table":           table,
-			"command":         ddlCommand,
-			"created_at":      createdAt.Format(time.RFC3339),
+		cdcMessage := utils.CDCMessage{
+			Type:            "DDL",
+			Schema:          schema,
+			Table:           table,
+			CommitTimestamp: createdAt,
+			Columns: []*pglogrepl.RelationMessageColumn{
+				{Name: "event_type", DataType: pgtype.TextOID},
+				{Name: "object_type", DataType: pgtype.TextOID},
+				{Name: "object_identity", DataType: pgtype.TextOID},
+				{Name: "ddl_command", DataType: pgtype.TextOID},
+			},
+			NewTuple: &pglogrepl.TupleData{
+				Columns: []*pglogrepl.TupleDataColumn{
+					{Data: []byte(eventType)},
+					{Data: []byte(objectType)},
+					{Data: []byte(objectIdentity)},
+					{Data: []byte(ddlCommand)},
+				},
+			},
 		}
 
-		events = append(events, event)
+		if err := d.BaseRepl.PublishToNATS(ctx, cdcMessage); err != nil {
+			d.BaseRepl.Logger.Error().Err(err).Msg("Error during publishing DDL event to NATS")
+			return nil
+		}
+
 		processedIDs = append(processedIDs, id)
 	}
 
@@ -211,19 +228,7 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 		return nil
 	}
 
-	if len(events) > 0 {
-		for _, event := range events {
-			if err := d.BaseRepl.bufferWrite(event); err != nil {
-				d.BaseRepl.Logger.Error().Err(err).Msg("Error during writing DDL buffer")
-				return nil
-			}
-		}
-
-		if err := d.BaseRepl.FlushBuffer(); err != nil {
-			d.BaseRepl.Logger.Error().Err(err).Msg("Error during flushing DDL buffer")
-			return nil
-		}
-
+	if len(processedIDs) > 0 {
 		_, err = d.DDLConn.Exec(ctx, "DELETE FROM internal_pg_flo.ddl_log WHERE id = ANY($1)", processedIDs)
 		if err != nil {
 			d.BaseRepl.Logger.Error().Err(err).Msg("Failed to clear processed DDL events")

@@ -4,12 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/shayonj/pg_flo/pkg/rules"
-	"github.com/shayonj/pg_flo/pkg/sinks"
+	"github.com/shayonj/pg_flo/pkg/pgflonats"
 )
 
 // NewReplicator creates a new Replicator based on the configuration
-func NewReplicator(config Config, sink sinks.Sink, copyAndStream bool, maxCopyWorkersPerTable int, ruleEngine *rules.RuleEngine) (Replicator, error) {
+func NewReplicator(config Config, natsClient *pgflonats.NATSClient, copyAndStream bool, maxCopyWorkersPerTable int) (Replicator, error) {
 	replicationConn := NewReplicationConnection(config)
 	if err := replicationConn.Connect(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to connect to database for replication: %v", err)
@@ -20,7 +19,7 @@ func NewReplicator(config Config, sink sinks.Sink, copyAndStream bool, maxCopyWo
 		return nil, fmt.Errorf("failed to create standard connection: %v", err)
 	}
 
-	baseReplicator := NewBaseReplicator(config, sink, replicationConn, standardConn, ruleEngine)
+	baseReplicator := NewBaseReplicator(config, replicationConn, standardConn, natsClient)
 
 	var ddlReplicator *DDLReplicator
 	if config.TrackDDL {

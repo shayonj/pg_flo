@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/nats-io/nats.go"
 )
 
 type Replicator interface {
@@ -39,4 +40,14 @@ type PgxPoolConn interface {
 	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
 	Release()
+}
+
+type NATSClient interface {
+	PublishMessage(subject string, data []byte) error
+	Close() error
+	GetStreamInfo() (*nats.StreamInfo, error)
+	PurgeStream() error
+	DeleteStream() error
+	SaveState(lsn pglogrepl.LSN) error
+	GetLastState() (pglogrepl.LSN, error)
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/nats-io/nats.go"
 	"github.com/shayonj/pg_flo/pkg/replicator"
 	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/utils"
@@ -282,4 +283,54 @@ func (m *MockRuleEngine) AddRule(tableName string, rule rules.Rule) {
 func (m *MockRuleEngine) LoadRules(config rules.Config) error {
 	args := m.Called(config)
 	return args.Error(0)
+}
+
+// MockNATSClient mocks the NATSClient
+type MockNATSClient struct {
+	mock.Mock
+}
+
+// PublishMessage mocks the PublishMessage method
+func (m *MockNATSClient) PublishMessage(subject string, data []byte) error {
+	args := m.Called(subject, data)
+	if len(args) == 0 {
+		return nil
+	}
+	return args.Error(0)
+}
+
+// Close mocks the Close method
+func (m *MockNATSClient) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// GetStreamInfo mocks the GetStreamInfo method
+func (m *MockNATSClient) GetStreamInfo() (*nats.StreamInfo, error) {
+	args := m.Called()
+	return args.Get(0).(*nats.StreamInfo), args.Error(1)
+}
+
+// PurgeStream mocks the PurgeStream method
+func (m *MockNATSClient) PurgeStream() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// DeleteStream mocks the DeleteStream method
+func (m *MockNATSClient) DeleteStream() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// SaveState mocks the SaveState method
+func (m *MockNATSClient) SaveState(lsn pglogrepl.LSN) error {
+	args := m.Called(lsn)
+	return args.Error(0)
+}
+
+// GetLastState mocks the GetLastState method
+func (m *MockNATSClient) GetLastState() (pglogrepl.LSN, error) {
+	args := m.Called()
+	return args.Get(0).(pglogrepl.LSN), args.Error(1)
 }
