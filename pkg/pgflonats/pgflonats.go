@@ -155,3 +155,19 @@ func (nc *NATSClient) GetLastState() (pglogrepl.LSN, error) {
 
 	return state.LSN, nil
 }
+
+func (nc *NATSClient) CreateConsumer(consumerName string) (*nats.ConsumerInfo, error) {
+	_, err := nc.js.AddConsumer(nc.stream, &nats.ConsumerConfig{
+		Durable:       consumerName,
+		AckPolicy:     nats.AckExplicitPolicy,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create consumer: %w", err)
+	}
+	return nc.js.ConsumerInfo(nc.stream, consumerName)
+}
+
+func (nc *NATSClient) Subscribe(stream, consumer string, handler nats.MsgHandler) (*nats.Subscription, error) {
+	return nc.js.QueueSubscribe(stream, consumer, handler, nats.Durable(consumer), nats.ManualAck())
+}

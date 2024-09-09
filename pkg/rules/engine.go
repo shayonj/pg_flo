@@ -14,39 +14,34 @@ func (re *RuleEngine) AddRule(tableName string, rule Rule) {
 }
 
 // ApplyRules applies all rules for the specified table to the given data
-func (re *RuleEngine) ApplyRules(tableName string, data map[string]utils.CDCValue, operation OperationType) (map[string]utils.CDCValue, error) {
+func (re *RuleEngine) ApplyRules(message *utils.CDCMessage) (*utils.CDCMessage, error) {
 	re.mutex.RLock()
 	defer re.mutex.RUnlock()
 
-	rules, exists := re.Rules[tableName]
+	rules, exists := re.Rules[message.Table]
 	if !exists {
-		logger.Info().Str("table", tableName).Msg("No rules found for table")
-		return data, nil // No rules for this table
+		logger.Info().Str("table", message.Table).Msg("No rules found for table")
+		return message, nil // No rules for this table
 	}
 
 	logger.Info().
-		Str("table", tableName).
-		Str("operation", string(operation)).
+		Str("table", message.Table).
+		Str("operation", message.Type).
 		Int("ruleCount", len(rules)).
 		Msg("Applying rules")
 
-	result := make(map[string]utils.CDCValue)
-	for k, v := range data {
-		result[k] = v
-	}
-
+	var err error
 	for _, rule := range rules {
-		var err error
-		result, err = rule.Apply(result, operation)
+		message, err = rule.Apply(message)
 		if err != nil {
-			return nil, fmt.Errorf("error applying rule: %w", err)
+			return nil, err
 		}
-		if result == nil {
-			return nil, nil // Rule filtered out the entire row
+		if message == nil {
+			// Message filtered out
+			return nil, nil
 		}
 	}
-
-	return result, nil
+	return message, nil
 }
 
 // LoadRules loads rules from the provided configuration

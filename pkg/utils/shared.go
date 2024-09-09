@@ -1,11 +1,12 @@
 package utils
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
 	"time"
+
+	"github.com/jackc/pgtype"
 )
 
 // ParseTimestamp attempts to parse a timestamp string using multiple layouts
@@ -27,6 +28,63 @@ func ParseTimestamp(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("unable to parse timestamp: %s", value)
+}
+
+// OidToTypeName maps PostgreSQL OIDs to their corresponding type names
+var OidToTypeName = map[uint32]string{
+	pgtype.BoolOID:             "bool",
+	pgtype.ByteaOID:            "bytea",
+	pgtype.Int8OID:             "int8",
+	pgtype.Int2OID:             "int2",
+	pgtype.Int4OID:             "int4",
+	pgtype.TextOID:             "text",
+	pgtype.JSONOID:             "json",
+	pgtype.Float4OID:           "float4",
+	pgtype.Float8OID:           "float8",
+	pgtype.BoolArrayOID:        "bool[]",
+	pgtype.Int2ArrayOID:        "int2[]",
+	pgtype.Int4ArrayOID:        "int4[]",
+	pgtype.TextArrayOID:        "text[]",
+	pgtype.ByteaArrayOID:       "bytea[]",
+	pgtype.Int8ArrayOID:        "int8[]",
+	pgtype.Float4ArrayOID:      "float4[]",
+	pgtype.Float8ArrayOID:      "float8[]",
+	pgtype.BPCharOID:           "bpchar",
+	pgtype.VarcharOID:          "varchar",
+	pgtype.DateOID:             "date",
+	pgtype.TimeOID:             "time",
+	pgtype.TimestampOID:        "timestamp",
+	pgtype.TimestampArrayOID:   "timestamp[]",
+	pgtype.DateArrayOID:        "date[]",
+	pgtype.TimestamptzOID:      "timestamptz",
+	pgtype.TimestamptzArrayOID: "timestamptz[]",
+	pgtype.IntervalOID:         "interval",
+	pgtype.NumericArrayOID:     "numeric[]",
+	pgtype.BitOID:              "bit",
+	pgtype.VarbitOID:           "varbit",
+	pgtype.NumericOID:          "numeric",
+	pgtype.UUIDOID:             "uuid",
+	pgtype.UUIDArrayOID:        "uuid[]",
+	pgtype.JSONBOID:            "jsonb",
+	pgtype.JSONBArrayOID:       "jsonb[]",
+}
+
+// OIDToString converts a PostgreSQL OID to its string representation
+func OIDToString(oid uint32) string {
+	if typeName, ok := OidToTypeName[oid]; ok {
+		return typeName
+	}
+	return fmt.Sprintf("unknown_%d", oid)
+}
+
+// StringToOID converts a type name to its PostgreSQL OID
+func StringToOID(typeName string) uint32 {
+	for oid, name := range OidToTypeName {
+		if name == typeName {
+			return oid
+		}
+	}
+	return 0
 }
 
 // ToInt64 converts an interface{} to int64
@@ -61,66 +119,24 @@ func ToFloat64(v interface{}) (float64, bool) {
 	return 0, false
 }
 
-// ToBool converts a value to bool
-func ToBool(v interface{}) bool {
+// ToBool converts various types to bool
+func ToBool(v interface{}) (bool, bool) {
 	switch v := v.(type) {
 	case bool:
-		return v
+		return v, true
 	case string:
-		b, _ := strconv.ParseBool(v)
-		return b
-	}
-	return false
-}
-
-// ToByteSlice converts a value to []byte
-func ToByteSlice(v interface{}) []byte {
-	switch v := v.(type) {
-	case []byte:
-		return v
-	case string:
-		return []byte(v)
-	}
-	return nil
-}
-
-// ToTime converts a value to time.Time
-func ToTime(v interface{}) time.Time {
-	switch v := v.(type) {
-	case time.Time:
-		return v
-	case string:
-		t, err := ParseTimestamp(v)
-		if err == nil {
-			return t
+		if v == "true" || v == "1" {
+			return true, true
 		}
+		if v == "false" || v == "0" {
+			return false, true
+		}
+	case int, int8, int16, int32, int64:
+		return reflect.ValueOf(v).Int() != 0, true
+	case uint, uint8, uint16, uint32, uint64:
+		return reflect.ValueOf(v).Uint() != 0, true
+	case float32, float64:
+		return reflect.ValueOf(v).Float() != 0, true
 	}
-	return time.Time{}
-}
-
-// ToJSON converts a value to json.RawMessage
-func ToJSON(v interface{}) json.RawMessage {
-	switch v := v.(type) {
-	case json.RawMessage:
-		return v
-	case string:
-		return json.RawMessage(v)
-	case []byte:
-		return json.RawMessage(v)
-	default:
-		data, _ := json.Marshal(v)
-		return json.RawMessage(data)
-	}
-}
-
-// ToString converts a value to string
-func ToString(v interface{}) string {
-	switch v := v.(type) {
-	case string:
-		return v
-	case []byte:
-		return string(v)
-	default:
-		return fmt.Sprintf("%v", v)
-	}
+	return false, false
 }

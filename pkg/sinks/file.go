@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// FileSink represents a sink that writes data to files
 type FileSink struct {
 	lastLSN        pglogrepl.LSN
 	statusDir      string
@@ -26,6 +27,7 @@ type FileSink struct {
 	mutex          sync.Mutex
 }
 
+// NewFileSink creates a new FileSink instance
 func NewFileSink(statusDir, outputDir string) (*FileSink, error) {
 	sink := &FileSink{
 		statusDir:      statusDir,
@@ -54,6 +56,7 @@ func NewFileSink(statusDir, outputDir string) (*FileSink, error) {
 	return sink, nil
 }
 
+// rotateFile creates a new log file and updates the current file pointer
 func (s *FileSink) rotateFile() error {
 	if s.currentFile != nil {
 		err := s.currentFile.Close()
@@ -80,6 +83,7 @@ func (s *FileSink) rotateFile() error {
 	return nil
 }
 
+// WriteBatch writes a batch of data to the current log file
 func (s *FileSink) WriteBatch(data []interface{}) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -108,6 +112,7 @@ func (s *FileSink) WriteBatch(data []interface{}) error {
 	return nil
 }
 
+// loadStatus loads the last known LSN from the status file
 func (s *FileSink) loadStatus() error {
 	data, err := os.ReadFile(s.lsnFile)
 	if os.IsNotExist(err) {
@@ -127,6 +132,7 @@ func (s *FileSink) loadStatus() error {
 	return nil
 }
 
+// saveStatus saves the current LSN to the status file
 func (s *FileSink) saveStatus() error {
 	status := Status{
 		LastLSN: s.lastLSN,
@@ -144,15 +150,18 @@ func (s *FileSink) saveStatus() error {
 	return nil
 }
 
+// GetLastLSN returns the last processed LSN
 func (s *FileSink) GetLastLSN() (pglogrepl.LSN, error) {
 	return s.lastLSN, nil
 }
 
+// SetLastLSN sets the last processed LSN and saves it to the status file
 func (s *FileSink) SetLastLSN(lsn pglogrepl.LSN) error {
 	s.lastLSN = lsn
 	return s.saveStatus()
 }
 
+// Close closes the current log file and performs any necessary cleanup
 func (s *FileSink) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

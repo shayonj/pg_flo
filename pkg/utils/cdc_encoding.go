@@ -1,8 +1,6 @@
 package utils
 
 import (
-	"bytes"
-	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -10,112 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgtype"
 )
-
-// EncodeCDCMessage encodes a CDCMessage into a byte slice
-func EncodeCDCMessage(m CDCMessage) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-
-	if err := enc.Encode(m.Type); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(m.Schema); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(m.Table); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(m.Columns); err != nil {
-		return nil, err
-	}
-
-	if err := enc.Encode(m.NewTuple != nil); err != nil {
-		return nil, err
-	}
-	if m.NewTuple != nil {
-		if err := enc.Encode(m.NewTuple); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := enc.Encode(m.OldTuple != nil); err != nil {
-		return nil, err
-	}
-	if m.OldTuple != nil {
-		if err := enc.Encode(m.OldTuple); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := enc.Encode(m.PrimaryKeyColumn); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(m.LSN); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(m.CommitTimestamp); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-// DecodeCDCMessage decodes a byte slice into a CDCMessage
-func DecodeCDCMessage(data []byte) (*CDCMessage, error) {
-	buf := bytes.NewBuffer(data)
-	dec := gob.NewDecoder(buf)
-	m := &CDCMessage{}
-
-	if err := dec.Decode(&m.Type); err != nil {
-		return nil, err
-	}
-	if err := dec.Decode(&m.Schema); err != nil {
-		return nil, err
-	}
-	if err := dec.Decode(&m.Table); err != nil {
-		return nil, err
-	}
-	if err := dec.Decode(&m.Columns); err != nil {
-		return nil, err
-	}
-
-	var newTupleExists bool
-	if err := dec.Decode(&newTupleExists); err != nil {
-		return nil, err
-	}
-	if newTupleExists {
-		m.NewTuple = &pglogrepl.TupleData{}
-		if err := dec.Decode(m.NewTuple); err != nil {
-			return nil, err
-		}
-	}
-
-	var oldTupleExists bool
-	if err := dec.Decode(&oldTupleExists); err != nil {
-		return nil, err
-	}
-	if oldTupleExists {
-		m.OldTuple = &pglogrepl.TupleData{}
-		if err := dec.Decode(m.OldTuple); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := dec.Decode(&m.PrimaryKeyColumn); err != nil {
-		return nil, err
-	}
-	if err := dec.Decode(&m.LSN); err != nil {
-		return nil, err
-	}
-	if err := dec.Decode(&m.CommitTimestamp); err != nil {
-		return nil, err
-	}
-
-	return m, nil
-}
 
 // ConvertToPgOutput converts a Go value to its PostgreSQL output format
 func ConvertToPgOutput(value interface{}, oid uint32) ([]byte, error) {
