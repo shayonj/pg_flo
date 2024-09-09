@@ -1,9 +1,11 @@
 package rules_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgtype"
 	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/utils"
@@ -14,9 +16,8 @@ func TestTransformRules(t *testing.T) {
 	tests := []struct {
 		name           string
 		rule           rules.Rule
-		input          map[string]utils.CDCValue
-		operation      rules.OperationType
-		expectedOutput map[string]utils.CDCValue
+		input          *utils.CDCMessage
+		expectedOutput *utils.CDCMessage
 	}{
 		{
 			name: "Regex Transform - Email Domain",
@@ -25,141 +26,62 @@ func TestTransformRules(t *testing.T) {
 				"pattern": "@example\\.com$",
 				"replace": "@masked.com",
 			}),
-			input: map[string]utils.CDCValue{
-				"email": {Type: pgtype.TextOID, Value: "user@example.com"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"email": {Type: pgtype.TextOID, Value: "user@masked.com"},
-			},
+			input:          createCDCMessage("INSERT", "email", pgtype.TextOID, "user@example.com"),
+			expectedOutput: createCDCMessage("INSERT", "email", pgtype.TextOID, "user@masked.com"),
 		},
 		{
-			name: "Regex Transform - Email Domain",
-			rule: createRule(t, "transform", "users", "email", map[string]interface{}{
-				"type":                "regex",
-				"pattern":             "@example\\.com$",
-				"replace":             "@masked.com",
-				"allow_empty_deletes": true,
+			name: "Mask Transform - Credit Card",
+			rule: createRule(t, "transform", "payments", "credit_card", map[string]interface{}{
+				"type":      "mask",
+				"mask_char": "*",
 			}),
-			input: map[string]utils.CDCValue{
-				"id":    {Type: pgtype.Int2OID, Value: 1},
-				"email": {Type: pgtype.TextOID, Value: nil},
-			},
-			operation: rules.OperationDelete,
-			expectedOutput: map[string]utils.CDCValue{
-				"id":    {Type: pgtype.Int2OID, Value: 1},
-				"email": {Type: pgtype.TextOID, Value: nil},
-			},
+			input:          createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "1234567890123456"),
+			expectedOutput: createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "1**************6"),
 		},
 		{
-			name: "Regex Transform - Phone Number Format",
-			rule: createRule(t, "transform", "users", "phone", map[string]interface{}{
+			name: "Regex Transform - Phone Number",
+			rule: createRule(t, "transform", "contacts", "phone", map[string]interface{}{
 				"type":    "regex",
 				"pattern": "(\\d{3})(\\d{3})(\\d{4})",
 				"replace": "($1) $2-$3",
 			}),
-			input: map[string]utils.CDCValue{
-				"phone": {Type: pgtype.TextOID, Value: "1234567890"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"phone": {Type: pgtype.TextOID, Value: "(123) 456-7890"},
-			},
-		},
-		{
-			name: "Mask Transform - Full Mask",
-			rule: createRule(t, "transform", "users", "ssn", map[string]interface{}{
-				"type":      "mask",
-				"mask_char": "*",
-			}),
-			input: map[string]utils.CDCValue{
-				"ssn": {Type: pgtype.TextOID, Value: "123-45-6789"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"ssn": {Type: pgtype.TextOID, Value: "1*********9"},
-			},
-		},
-		{
-			name: "Mask Transform - Partial Mask",
-			rule: createRule(t, "transform", "users", "credit_card", map[string]interface{}{
-				"type":      "mask",
-				"mask_char": "X",
-			}),
-			input: map[string]utils.CDCValue{
-				"credit_card": {Type: pgtype.TextOID, Value: "1234-5678-9012-3456"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"credit_card": {Type: pgtype.TextOID, Value: "1XXXXXXXXXXXXXXXXX6"},
-			},
+			input:          createCDCMessage("UPDATE", "phone", pgtype.TextOID, "1234567890"),
+			expectedOutput: createCDCMessage("UPDATE", "phone", pgtype.TextOID, "(123) 456-7890"),
 		},
 		{
 			name: "Regex Transform - No Match",
-			rule: createRule(t, "transform", "users", "username", map[string]interface{}{
+			rule: createRule(t, "transform", "users", "email", map[string]interface{}{
 				"type":    "regex",
-				"pattern": "admin",
-				"replace": "user",
+				"pattern": "@example\\.com$",
+				"replace": "@masked.com",
 			}),
-			input: map[string]utils.CDCValue{
-				"username": {Type: pgtype.TextOID, Value: "john_doe"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"username": {Type: pgtype.TextOID, Value: "john_doe"},
-			},
+			input:          createCDCMessage("INSERT", "email", pgtype.TextOID, "user@otherdomain.com"),
+			expectedOutput: createCDCMessage("INSERT", "email", pgtype.TextOID, "user@otherdomain.com"),
 		},
 		{
 			name: "Mask Transform - Short String",
-			rule: createRule(t, "transform", "users", "initials", map[string]interface{}{
+			rule: createRule(t, "transform", "payments", "credit_card", map[string]interface{}{
 				"type":      "mask",
 				"mask_char": "*",
 			}),
-			input: map[string]utils.CDCValue{
-				"initials": {Type: pgtype.TextOID, Value: "JD"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"initials": {Type: pgtype.TextOID, Value: "JD"},
-			},
+			input:          createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "12"),
+			expectedOutput: createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "12"),
 		},
 		{
-			name: "Regex Transform - Email Domain (INSERT operation)",
-			rule: createRule(t, "transform", "users", "email", map[string]interface{}{
-				"type":       "regex",
-				"pattern":    "@example\\.com$",
-				"replace":    "@masked.com",
-				"operations": []rules.OperationType{rules.OperationInsert},
+			name: "Regex Transform - Non-String Input",
+			rule: createRule(t, "transform", "products", "price", map[string]interface{}{
+				"type":    "regex",
+				"pattern": "^\\d+\\.\\d{2}$",
+				"replace": "$.$$",
 			}),
-			input: map[string]utils.CDCValue{
-				"email": {Type: pgtype.TextOID, Value: "user@example.com"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"email": {Type: pgtype.TextOID, Value: "user@masked.com"},
-			},
-		},
-		{
-			name: "Regex Transform - Email Domain (UPDATE operation, not applied)",
-			rule: createRule(t, "transform", "users", "email", map[string]interface{}{
-				"type":       "regex",
-				"pattern":    "@example\\.com$",
-				"replace":    "@masked.com",
-				"operations": []rules.OperationType{rules.OperationInsert},
-			}),
-			input: map[string]utils.CDCValue{
-				"email": {Type: pgtype.TextOID, Value: "user@example.com"},
-			},
-			operation: rules.OperationUpdate,
-			expectedOutput: map[string]utils.CDCValue{
-				"email": {Type: pgtype.TextOID, Value: "user@example.com"},
-			},
+			input:          createCDCMessage("UPDATE", "price", pgtype.Float8OID, 99.99),
+			expectedOutput: createCDCMessage("UPDATE", "price", pgtype.Float8OID, 99.99),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := tt.rule.Apply(tt.input, tt.operation)
+			output, err := tt.rule.Apply(tt.input)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedOutput, output)
 		})
@@ -170,9 +92,8 @@ func TestFilterRules(t *testing.T) {
 	tests := []struct {
 		name           string
 		rule           rules.Rule
-		input          map[string]utils.CDCValue
-		operation      rules.OperationType
-		expectedOutput map[string]utils.CDCValue
+		input          *utils.CDCMessage
+		expectedOutput *utils.CDCMessage
 	}{
 		{
 			name: "Equal Filter (Text) - Pass",
@@ -180,30 +101,8 @@ func TestFilterRules(t *testing.T) {
 				"operator": "eq",
 				"value":    "completed",
 			}),
-			input: map[string]utils.CDCValue{
-				"status": {Type: pgtype.TextOID, Value: "completed"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"status": {Type: pgtype.TextOID, Value: "completed"},
-			},
-		},
-		{
-			name: "Equal Filter (Text) - (DELETE - allow empty delete) Pass",
-			rule: createRule(t, "filter", "orders", "status", map[string]interface{}{
-				"operator":            "eq",
-				"value":               "completed",
-				"allow_empty_deletes": true,
-			}),
-			input: map[string]utils.CDCValue{
-				"id":     {Type: pgtype.Int8OID, Value: 1},
-				"status": {Type: pgtype.Int8OID, Value: nil},
-			},
-			operation: rules.OperationDelete,
-			expectedOutput: map[string]utils.CDCValue{
-				"id":     {Type: pgtype.Int8OID, Value: 1},
-				"status": {Type: pgtype.Int8OID, Value: nil},
-			},
+			input:          createCDCMessage("INSERT", "status", pgtype.TextOID, "completed"),
+			expectedOutput: createCDCMessage("INSERT", "status", pgtype.TextOID, "completed"),
 		},
 		{
 			name: "Equal Filter (Text) - Fail",
@@ -211,307 +110,77 @@ func TestFilterRules(t *testing.T) {
 				"operator": "eq",
 				"value":    "completed",
 			}),
-			input: map[string]utils.CDCValue{
-				"status": {Type: pgtype.TextOID, Value: "pending"},
-			},
-			operation:      rules.OperationInsert,
+			input:          createCDCMessage("INSERT", "status", pgtype.TextOID, "pending"),
 			expectedOutput: nil,
 		},
 		{
-			name: "Equal Filter (Int2) - Pass",
-			rule: createRule(t, "filter", "products", "quantity", map[string]interface{}{
-				"operator": "eq",
-				"value":    int16(10),
-			}),
-			input: map[string]utils.CDCValue{
-				"quantity": {Type: pgtype.Int2OID, Value: int16(10)},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"quantity": {Type: pgtype.Int2OID, Value: int16(10)},
-			},
-		},
-		{
-			name: "Equal Filter (Int2) - Fail",
-			rule: createRule(t, "filter", "products", "quantity", map[string]interface{}{
-				"operator": "eq",
-				"value":    int16(10),
-			}),
-			input: map[string]utils.CDCValue{
-				"quantity": {Type: pgtype.Int2OID, Value: int16(5)},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Greater Than Filter (Int4) - Pass",
+			name: "Greater Than Filter (Integer) - Pass",
 			rule: createRule(t, "filter", "products", "stock", map[string]interface{}{
 				"operator": "gt",
-				"value":    int32(100),
+				"value":    10,
 			}),
-			input: map[string]utils.CDCValue{
-				"stock": {Type: pgtype.Int4OID, Value: int32(150)},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"stock": {Type: pgtype.Int4OID, Value: int32(150)},
-			},
+			input:          createCDCMessage("UPDATE", "stock", pgtype.Int4OID, 15),
+			expectedOutput: createCDCMessage("UPDATE", "stock", pgtype.Int4OID, 15),
 		},
 		{
-			name: "Greater Than Filter (Int4) - Fail",
-			rule: createRule(t, "filter", "products", "stock", map[string]interface{}{
-				"operator": "gt",
-				"value":    int32(100),
-			}),
-			input: map[string]utils.CDCValue{
-				"stock": {Type: pgtype.Int4OID, Value: int32(50)},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Less Than Filter (Int8) - Pass",
-			rule: createRule(t, "filter", "orders", "total_amount", map[string]interface{}{
+			name: "Less Than Filter (Float) - Pass",
+			rule: createRule(t, "filter", "prices", "amount", map[string]interface{}{
 				"operator": "lt",
-				"value":    int64(1000),
+				"value":    100.0,
 			}),
-			input: map[string]utils.CDCValue{
-				"total_amount": {Type: pgtype.Int8OID, Value: int64(500)},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"total_amount": {Type: pgtype.Int8OID, Value: int64(500)},
-			},
-		},
-		{
-			name: "Less Than Filter (Int8) - Fail",
-			rule: createRule(t, "filter", "orders", "total_amount", map[string]interface{}{
-				"operator": "lt",
-				"value":    int64(1000),
-			}),
-			input: map[string]utils.CDCValue{
-				"total_amount": {Type: pgtype.Int8OID, Value: int64(1500)},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Greater Than or Equal Filter (Float4) - Pass",
-			rule: createRule(t, "filter", "products", "weight", map[string]interface{}{
-				"operator": "gte",
-				"value":    float32(2.5),
-			}),
-			input: map[string]utils.CDCValue{
-				"weight": {Type: pgtype.Float4OID, Value: float32(3.0)},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"weight": {Type: pgtype.Float4OID, Value: float32(3.0)},
-			},
-		},
-		{
-			name: "Greater Than or Equal Filter (Float4) - Fail",
-			rule: createRule(t, "filter", "products", "weight", map[string]interface{}{
-				"operator": "gte",
-				"value":    float32(2.5),
-			}),
-			input: map[string]utils.CDCValue{
-				"weight": {Type: pgtype.Float4OID, Value: float32(2.0)},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Less Than or Equal Filter (Float8) - Pass",
-			rule: createRule(t, "filter", "products", "price", map[string]interface{}{
-				"operator": "lte",
-				"value":    float64(99.99),
-			}),
-			input: map[string]utils.CDCValue{
-				"price": {Type: pgtype.Float8OID, Value: float64(89.99)},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"price": {Type: pgtype.Float8OID, Value: float64(89.99)},
-			},
-		},
-		{
-			name: "Less Than or Equal Filter (Float8) - Fail",
-			rule: createRule(t, "filter", "products", "price", map[string]interface{}{
-				"operator": "lte",
-				"value":    float64(99.99),
-			}),
-			input: map[string]utils.CDCValue{
-				"price": {Type: pgtype.Float8OID, Value: float64(109.99)},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Not Equal Filter (Boolean) - Pass",
-			rule: createRule(t, "filter", "users", "is_active", map[string]interface{}{
-				"operator": "ne",
-				"value":    false,
-			}),
-			input: map[string]utils.CDCValue{
-				"is_active": {Type: pgtype.BoolOID, Value: true},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"is_active": {Type: pgtype.BoolOID, Value: true},
-			},
-		},
-		{
-			name: "Not Equal Filter (Boolean) - Fail",
-			rule: createRule(t, "filter", "users", "is_active", map[string]interface{}{
-				"operator": "ne",
-				"value":    false,
-			}),
-			input: map[string]utils.CDCValue{
-				"is_active": {Type: pgtype.BoolOID, Value: false},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Greater Than Filter (Timestamp) - Pass",
-			rule: createRule(t, "filter", "events", "created_at", map[string]interface{}{
-				"operator": "gt",
-				"value":    "2023-01-01T00:00:00Z",
-			}),
-			input: map[string]utils.CDCValue{
-				"created_at": {Type: pgtype.TimestampOID, Value: time.Date(2023, 6, 1, 12, 0, 0, 0, time.UTC)},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"created_at": {Type: pgtype.TimestampOID, Value: time.Date(2023, 6, 1, 12, 0, 0, 0, time.UTC)},
-			},
-		},
-		{
-			name: "Greater Than Filter (Timestamp) - Fail",
-			rule: createRule(t, "filter", "events", "created_at", map[string]interface{}{
-				"operator": "gt",
-				"value":    "2023-01-01T00:00:00Z",
-			}),
-			input: map[string]utils.CDCValue{
-				"created_at": {Type: pgtype.TimestampOID, Value: time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC)},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Less Than Filter (TimestampTZ) - Pass",
-			rule: createRule(t, "filter", "logs", "timestamp", map[string]interface{}{
-				"operator": "lt",
-				"value":    "2023-12-31T23:59:59Z",
-			}),
-			input: map[string]utils.CDCValue{
-				"timestamp": {Type: pgtype.TimestamptzOID, Value: time.Date(2023, 6, 1, 12, 0, 0, 0, time.UTC)},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"timestamp": {Type: pgtype.TimestamptzOID, Value: time.Date(2023, 6, 1, 12, 0, 0, 0, time.UTC)},
-			},
-		},
-		{
-			name: "Less Than Filter (TimestampTZ) - Fail",
-			rule: createRule(t, "filter", "logs", "timestamp", map[string]interface{}{
-				"operator": "lt",
-				"value":    "2023-12-31T23:59:59Z",
-			}),
-			input: map[string]utils.CDCValue{
-				"timestamp": {Type: pgtype.TimestamptzOID, Value: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Equal Filter (Numeric) - Pass",
-			rule: createRule(t, "filter", "products", "rating", map[string]interface{}{
-				"operator": "eq",
-				"value":    "4.5",
-			}),
-			input: map[string]utils.CDCValue{
-				"rating": {Type: pgtype.NumericOID, Value: "4.5"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"rating": {Type: pgtype.NumericOID, Value: "4.5"},
-			},
-		},
-		{
-			name: "Equal Filter (Numeric) - Fail",
-			rule: createRule(t, "filter", "products", "rating", map[string]interface{}{
-				"operator": "eq",
-				"value":    "4.5",
-			}),
-			input: map[string]utils.CDCValue{
-				"rating": {Type: pgtype.NumericOID, Value: "3.8"},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
+			input:          createCDCMessage("INSERT", "amount", pgtype.Float8OID, 99.99),
+			expectedOutput: createCDCMessage("INSERT", "amount", pgtype.Float8OID, 99.99),
 		},
 		{
 			name: "Contains Filter (Text) - Pass",
-			rule: createRule(t, "filter", "products", "description", map[string]interface{}{
+			rule: createRule(t, "filter", "products", "name", map[string]interface{}{
 				"operator": "contains",
-				"value":    "organic",
+				"value":    "Premium",
 			}),
-			input: map[string]utils.CDCValue{
-				"description": {Type: pgtype.TextOID, Value: "Fresh organic apples"},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"description": {Type: pgtype.TextOID, Value: "Fresh organic apples"},
-			},
+			input:          createCDCMessage("INSERT", "name", pgtype.TextOID, "Premium Widget"),
+			expectedOutput: createCDCMessage("INSERT", "name", pgtype.TextOID, "Premium Widget"),
 		},
 		{
-			name: "Contains Filter (Text) - Fail",
-			rule: createRule(t, "filter", "products", "description", map[string]interface{}{
-				"operator": "contains",
-				"value":    "organic",
+			name: "Equal Filter (Case Insensitive) - Pass",
+			rule: createRule(t, "filter", "products", "category", map[string]interface{}{
+				"operator": "eq",
+				"value":    "Electronics",
 			}),
-			input: map[string]utils.CDCValue{
-				"description": {Type: pgtype.TextOID, Value: "Fresh apples"},
-			},
-			operation:      rules.OperationInsert,
+			input:          createCDCMessage("INSERT", "category", pgtype.TextOID, "electronics"),
 			expectedOutput: nil,
 		},
 		{
-			name: "Equal Filter (Text) - Pass (DELETE operation)",
-			rule: createRule(t, "filter", "orders", "status", map[string]interface{}{
-				"operator":   "eq",
-				"value":      "completed",
-				"operations": []rules.OperationType{rules.OperationDelete},
+			name: "Greater Than Filter (String vs Integer) - Pass",
+			rule: createRule(t, "filter", "orders", "quantity", map[string]interface{}{
+				"operator": "gt",
+				"value":    "5",
 			}),
-			input: map[string]utils.CDCValue{
-				"status": {Type: pgtype.TextOID, Value: "completed"},
-			},
-			operation: rules.OperationDelete,
-			expectedOutput: map[string]utils.CDCValue{
-				"status": {Type: pgtype.TextOID, Value: "completed"},
-			},
+			input:          createCDCMessage("UPDATE", "quantity", pgtype.Int4OID, 10),
+			expectedOutput: createCDCMessage("UPDATE", "quantity", pgtype.Int4OID, 10),
 		},
 		{
-			name: "Equal Filter (Text) - Not Applied (UPDATE operation)",
-			rule: createRule(t, "filter", "orders", "status", map[string]interface{}{
-				"operator":   "eq",
-				"value":      "completed",
-				"operations": []rules.OperationType{rules.OperationDelete},
+			name: "Less Than Filter (Float vs Integer) - Pass",
+			rule: createRule(t, "filter", "products", "price", map[string]interface{}{
+				"operator": "lt",
+				"value":    100,
 			}),
-			input: map[string]utils.CDCValue{
-				"status": {Type: pgtype.TextOID, Value: "completed"},
-			},
-			operation: rules.OperationUpdate,
-			expectedOutput: map[string]utils.CDCValue{
-				"status": {Type: pgtype.TextOID, Value: "completed"},
-			},
+			input:          createCDCMessage("INSERT", "price", pgtype.Float8OID, 99.99),
+			expectedOutput: createCDCMessage("INSERT", "price", pgtype.Float8OID, 99.99),
+		},
+		{
+			name: "Contains Filter (Case Sensitive) - Fail",
+			rule: createRule(t, "filter", "users", "name", map[string]interface{}{
+				"operator": "contains",
+				"value":    "John",
+			}),
+			input:          createCDCMessage("INSERT", "name", pgtype.TextOID, "john doe"),
+			expectedOutput: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := tt.rule.Apply(tt.input, tt.operation)
+			output, err := tt.rule.Apply(tt.input)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedOutput, output)
 		})
@@ -521,14 +190,12 @@ func TestFilterRules(t *testing.T) {
 func TestDateTimeFilters(t *testing.T) {
 	now := time.Now()
 	pastDate := now.Add(-24 * time.Hour)
-	futureDate := now.Add(24 * time.Hour)
 
 	tests := []struct {
 		name           string
 		rule           rules.Rule
-		input          map[string]utils.CDCValue
-		operation      rules.OperationType
-		expectedOutput map[string]utils.CDCValue
+		input          *utils.CDCMessage
+		expectedOutput *utils.CDCMessage
 	}{
 		{
 			name: "Greater Than Date Filter - Pass",
@@ -536,61 +203,149 @@ func TestDateTimeFilters(t *testing.T) {
 				"operator": "gt",
 				"value":    pastDate.Format(time.RFC3339),
 			}),
-			input: map[string]utils.CDCValue{
-				"date": {Type: pgtype.TimestamptzOID, Value: now},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"date": {Type: pgtype.TimestamptzOID, Value: now},
-			},
+			input:          createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now),
+			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now),
 		},
 		{
-			name: "Greater Than Date Filter - Fail",
+			name: "Less Than or Equal Date Filter - Pass",
+			rule: createRule(t, "filter", "events", "date", map[string]interface{}{
+				"operator": "lte",
+				"value":    now.Format(time.RFC3339),
+			}),
+			input:          createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, pastDate),
+			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, pastDate),
+		},
+		{
+			name: "Equal Date Filter (Different Timezone) - Pass",
+			rule: createRule(t, "filter", "events", "date", map[string]interface{}{
+				"operator": "eq",
+				"value":    now.UTC().Format(time.RFC3339),
+			}),
+			input:          createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now.In(time.FixedZone("EST", -5*60*60))),
+			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now.In(time.FixedZone("EST", -5*60*60))),
+		},
+		{
+			name: "Greater Than Date Filter (String Input) - Fail",
 			rule: createRule(t, "filter", "events", "date", map[string]interface{}{
 				"operator": "gt",
-				"value":    futureDate.Format(time.RFC3339),
+				"value":    pastDate.Format(time.RFC3339),
 			}),
-			input: map[string]utils.CDCValue{
-				"date": {Type: pgtype.TimestamptzOID, Value: now},
-			},
-			operation:      rules.OperationInsert,
-			expectedOutput: nil,
-		},
-		{
-			name: "Greater Than Date Filter - Pass (INSERT operation)",
-			rule: createRule(t, "filter", "events", "date", map[string]interface{}{
-				"operator":   "gt",
-				"value":      pastDate.Format(time.RFC3339),
-				"operations": []rules.OperationType{rules.OperationInsert},
-			}),
-			input: map[string]utils.CDCValue{
-				"date": {Type: pgtype.TimestamptzOID, Value: now},
-			},
-			operation: rules.OperationInsert,
-			expectedOutput: map[string]utils.CDCValue{
-				"date": {Type: pgtype.TimestamptzOID, Value: now},
-			},
-		},
-		{
-			name: "Greater Than Date Filter - Not Applied (UPDATE operation)",
-			rule: createRule(t, "filter", "events", "date", map[string]interface{}{
-				"operator":   "gt",
-				"value":      pastDate.Format(time.RFC3339),
-				"operations": []rules.OperationType{rules.OperationInsert},
-			}),
-			input: map[string]utils.CDCValue{
-				"date": {Type: pgtype.TimestamptzOID, Value: now},
-			},
-			operation: rules.OperationUpdate,
-			expectedOutput: map[string]utils.CDCValue{
-				"date": {Type: pgtype.TimestamptzOID, Value: now},
-			},
+			input:          createCDCMessage("INSERT", "date", pgtype.TextOID, now.Format(time.RFC3339)),
+			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TextOID, now.Format(time.RFC3339)),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := tt.rule.Apply(tt.input, tt.operation)
+			output, err := tt.rule.Apply(tt.input)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedOutput, output)
+		})
+	}
+}
+
+func TestBooleanFilters(t *testing.T) {
+	tests := []struct {
+		name           string
+		rule           rules.Rule
+		input          *utils.CDCMessage
+		expectedOutput *utils.CDCMessage
+	}{
+		{
+			name: "Equal Boolean Filter - Pass",
+			rule: createRule(t, "filter", "users", "is_active", map[string]interface{}{
+				"operator": "eq",
+				"value":    true,
+			}),
+			input:          createCDCMessage("INSERT", "is_active", pgtype.BoolOID, true),
+			expectedOutput: createCDCMessage("INSERT", "is_active", pgtype.BoolOID, true),
+		},
+		{
+			name: "Not Equal Boolean Filter - Pass",
+			rule: createRule(t, "filter", "users", "is_deleted", map[string]interface{}{
+				"operator": "ne",
+				"value":    true,
+			}),
+			input:          createCDCMessage("UPDATE", "is_deleted", pgtype.BoolOID, false),
+			expectedOutput: createCDCMessage("UPDATE", "is_deleted", pgtype.BoolOID, false),
+		},
+		{
+			name: "Equal Boolean Filter (String Input) - Pass",
+			rule: createRule(t, "filter", "users", "is_active", map[string]interface{}{
+				"operator": "eq",
+				"value":    true,
+			}),
+			input:          createCDCMessage("INSERT", "is_active", pgtype.TextOID, "true"),
+			expectedOutput: nil,
+		},
+		{
+			name: "Not Equal Boolean Filter (Integer Input) - Fail",
+			rule: createRule(t, "filter", "users", "is_deleted", map[string]interface{}{
+				"operator": "ne",
+				"value":    false,
+			}),
+			input:          createCDCMessage("UPDATE", "is_deleted", pgtype.Int4OID, 0),
+			expectedOutput: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := tt.rule.Apply(tt.input)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedOutput, output)
+		})
+	}
+}
+
+func TestNumericFilters(t *testing.T) {
+	tests := []struct {
+		name           string
+		rule           rules.Rule
+		input          *utils.CDCMessage
+		expectedOutput *utils.CDCMessage
+	}{
+		{
+			name: "Greater Than or Equal Numeric Filter - Pass",
+			rule: createRule(t, "filter", "products", "price", map[string]interface{}{
+				"operator": "gte",
+				"value":    "99.99",
+			}),
+			input:          createCDCMessage("INSERT", "price", pgtype.NumericOID, "100.00"),
+			expectedOutput: createCDCMessage("INSERT", "price", pgtype.NumericOID, "100.00"),
+		},
+		{
+			name: "Less Than Numeric Filter - Pass",
+			rule: createRule(t, "filter", "orders", "total", map[string]interface{}{
+				"operator": "lt",
+				"value":    "1000.00",
+			}),
+			input:          createCDCMessage("UPDATE", "total", pgtype.NumericOID, "999.99"),
+			expectedOutput: createCDCMessage("UPDATE", "total", pgtype.NumericOID, "999.99"),
+		},
+		{
+			name: "Less Than Numeric Filter (String Input) - Fail",
+			rule: createRule(t, "filter", "orders", "total", map[string]interface{}{
+				"operator": "lt",
+				"value":    1000.00,
+			}),
+			input:          createCDCMessage("UPDATE", "total", pgtype.TextOID, "999.99"),
+			expectedOutput: nil,
+		},
+		{
+			name: "Equal Numeric Filter (Precision Mismatch) - Pass",
+			rule: createRule(t, "filter", "products", "weight", map[string]interface{}{
+				"operator": "eq",
+				"value":    1.23,
+			}),
+			input:          createCDCMessage("INSERT", "weight", pgtype.Float8OID, 1.2300000001),
+			expectedOutput: createCDCMessage("INSERT", "weight", pgtype.Float8OID, 1.2300000001),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := tt.rule.Apply(tt.input)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedOutput, output)
 		})
@@ -615,4 +370,35 @@ func createRule(t *testing.T, ruleType, table, column string, params map[string]
 	}
 
 	return rule
+}
+
+func createCDCMessage(opType, columnName string, dataType uint32, value interface{}) *utils.CDCMessage {
+	return &utils.CDCMessage{
+		Type: opType,
+		Columns: []*pglogrepl.RelationMessageColumn{
+			{Name: columnName, DataType: dataType},
+		},
+		NewTuple: &pglogrepl.TupleData{
+			Columns: []*pglogrepl.TupleDataColumn{
+				{Data: encodeValue(value)},
+			},
+		},
+	}
+}
+
+func encodeValue(value interface{}) []byte {
+	switch v := value.(type) {
+	case string:
+		return []byte(v)
+	case int:
+		return []byte(fmt.Sprintf("%d", v))
+	case float64:
+		return []byte(fmt.Sprintf("%f", v))
+	case bool:
+		return []byte(fmt.Sprintf("%t", v))
+	case time.Time:
+		return []byte(v.Format(time.RFC3339))
+	default:
+		return []byte(fmt.Sprintf("%v", v))
+	}
 }

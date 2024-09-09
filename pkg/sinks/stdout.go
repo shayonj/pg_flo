@@ -11,12 +11,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// StdoutSink represents a sink that writes data to standard output
 type StdoutSink struct {
 	lastLSN   pglogrepl.LSN
 	statusDir string
 	lsnFile   string
 }
 
+// NewStdoutSink creates a new StdoutSink instance
 func NewStdoutSink(statusDir string) (*StdoutSink, error) {
 	sink := &StdoutSink{
 		statusDir: statusDir,
@@ -34,6 +36,7 @@ func NewStdoutSink(statusDir string) (*StdoutSink, error) {
 	return sink, nil
 }
 
+// loadStatus loads the last known LSN from the status file
 func (s *StdoutSink) loadStatus() error {
 	data, err := os.ReadFile(s.lsnFile)
 	if os.IsNotExist(err) {
@@ -53,6 +56,7 @@ func (s *StdoutSink) loadStatus() error {
 	return nil
 }
 
+// saveStatus saves the current LSN to the status file
 func (s *StdoutSink) saveStatus() error {
 	status := Status{
 		LastLSN: s.lastLSN,
@@ -70,6 +74,7 @@ func (s *StdoutSink) saveStatus() error {
 	return nil
 }
 
+// WriteBatch writes a batch of data to standard output
 func (s *StdoutSink) WriteBatch(data []interface{}) error {
 	for _, item := range data {
 		jsonData, err := json.Marshal(item)
@@ -82,15 +87,19 @@ func (s *StdoutSink) WriteBatch(data []interface{}) error {
 	}
 	return nil
 }
+
+// GetLastLSN returns the last processed LSN
 func (s *StdoutSink) GetLastLSN() (pglogrepl.LSN, error) {
 	return s.lastLSN, nil
 }
 
+// SetLastLSN sets the last processed LSN and saves it to the status file
 func (s *StdoutSink) SetLastLSN(lsn pglogrepl.LSN) error {
 	s.lastLSN = lsn
 	return s.saveStatus()
 }
 
+// Close performs any necessary cleanup (no-op for StdoutSink)
 func (s *StdoutSink) Close() error {
 	return nil
 }

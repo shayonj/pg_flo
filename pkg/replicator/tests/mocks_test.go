@@ -9,8 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/nats-io/nats.go"
 	"github.com/shayonj/pg_flo/pkg/replicator"
-	"github.com/shayonj/pg_flo/pkg/rules"
-	"github.com/shayonj/pg_flo/pkg/utils"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -260,29 +258,6 @@ func (m *MockRows) RawValues() [][]byte {
 func (m *MockRows) Conn() *pgx.Conn {
 	args := m.Called()
 	return args.Get(0).(*pgx.Conn)
-}
-
-// Add this new mock implementation for RuleEngine
-type MockRuleEngine struct {
-	mock.Mock
-}
-
-func (m *MockRuleEngine) ApplyRules(tableName string, data map[string]utils.CDCValue, operation rules.OperationType) (map[string]utils.CDCValue, error) {
-	args := m.Called(tableName, data, operation)
-	result := args.Get(0)
-	if result == nil {
-		return nil, args.Error(1)
-	}
-	return result.(map[string]utils.CDCValue), args.Error(1)
-}
-
-func (m *MockRuleEngine) AddRule(tableName string, rule rules.Rule) {
-	m.Called(tableName, rule)
-}
-
-func (m *MockRuleEngine) LoadRules(config rules.Config) error {
-	args := m.Called(config)
-	return args.Error(0)
 }
 
 // MockNATSClient mocks the NATSClient

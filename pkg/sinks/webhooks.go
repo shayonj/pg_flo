@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// WebhookSink represents a sink that sends data to a webhook endpoint
 type WebhookSink struct {
 	lastLSN    pglogrepl.LSN
 	statusDir  string
@@ -20,6 +21,7 @@ type WebhookSink struct {
 	client     *http.Client
 }
 
+// NewWebhookSink creates a new WebhookSink instance
 func NewWebhookSink(statusDir, webhookURL string) (*WebhookSink, error) {
 	sink := &WebhookSink{
 		statusDir:  statusDir,
@@ -39,6 +41,7 @@ func NewWebhookSink(statusDir, webhookURL string) (*WebhookSink, error) {
 	return sink, nil
 }
 
+// loadStatus loads the last known LSN from the status file
 func (s *WebhookSink) loadStatus() error {
 	data, err := os.ReadFile(s.lsnFile)
 	if os.IsNotExist(err) {
@@ -58,6 +61,7 @@ func (s *WebhookSink) loadStatus() error {
 	return nil
 }
 
+// saveStatus saves the current LSN to the status file
 func (s *WebhookSink) saveStatus() error {
 	status := Status{
 		LastLSN: s.lastLSN,
@@ -75,6 +79,7 @@ func (s *WebhookSink) saveStatus() error {
 	return nil
 }
 
+// WriteBatch sends a batch of data to the webhook endpoint
 func (s *WebhookSink) WriteBatch(data []interface{}) error {
 	for _, item := range data {
 		jsonData, err := json.Marshal(item)
@@ -90,6 +95,7 @@ func (s *WebhookSink) WriteBatch(data []interface{}) error {
 	return nil
 }
 
+// sendWithRetry sends data to the webhook endpoint with retry logic
 func (s *WebhookSink) sendWithRetry(jsonData []byte) error {
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -122,15 +128,18 @@ func (s *WebhookSink) sendWithRetry(jsonData []byte) error {
 	return nil
 }
 
+// GetLastLSN returns the last processed LSN
 func (s *WebhookSink) GetLastLSN() (pglogrepl.LSN, error) {
 	return s.lastLSN, nil
 }
 
+// SetLastLSN sets the last processed LSN and saves it to the status file
 func (s *WebhookSink) SetLastLSN(lsn pglogrepl.LSN) error {
 	s.lastLSN = lsn
 	return s.saveStatus()
 }
 
+// Close performs any necessary cleanup (no-op for WebhookSink)
 func (s *WebhookSink) Close() error {
 	return nil
 }

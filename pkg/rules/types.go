@@ -17,7 +17,7 @@ const (
 
 // Rule interface defines the methods that all rules must implement
 type Rule interface {
-	Apply(data map[string]utils.CDCValue, operation OperationType) (map[string]utils.CDCValue, error)
+	Apply(message *utils.CDCMessage) (*utils.CDCMessage, error)
 }
 
 // RuleConfig represents the configuration for a single rule
@@ -38,7 +38,7 @@ type Config struct {
 type TransformRule struct {
 	TableName         string
 	ColumnName        string
-	Transform         func(utils.CDCValue) (utils.CDCValue, error)
+	Transform         func(*utils.CDCMessage) (*utils.CDCMessage, error)
 	Operations        []OperationType
 	AllowEmptyDeletes bool
 }
@@ -47,7 +47,7 @@ type TransformRule struct {
 type FilterRule struct {
 	TableName         string
 	ColumnName        string
-	Condition         func(utils.CDCValue) bool
+	Condition         func(*utils.CDCMessage) bool
 	Operations        []OperationType
 	AllowEmptyDeletes bool
 }
