@@ -25,11 +25,6 @@ type CopyAndStreamReplicator struct {
 	DDLReplicator          DDLReplicator
 }
 
-// CreatePublication creates a new publication for the specified tables.
-func (r *CopyAndStreamReplicator) CreatePublication() error {
-	return r.BaseReplicator.CreatePublication()
-}
-
 // StartReplication begins the replication process.
 func (r *CopyAndStreamReplicator) StartReplication() error {
 	ctx, cancel := context.WithCancel(context.Background())

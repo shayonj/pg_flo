@@ -18,7 +18,7 @@ import (
 // GeneratePublicationName generates a deterministic publication name based on the group name
 func GeneratePublicationName(group string) string {
 	group = strings.ReplaceAll(group, "-", "_")
-	return fmt.Sprintf("%s_publication", group)
+	return fmt.Sprintf("pg_flo_%s_publication", group)
 }
 
 // BaseReplicator provides core functionality for PostgreSQL logical replication
@@ -56,6 +56,18 @@ func NewBaseReplicator(config Config, replicationConn ReplicationConnection, sta
 		br.Logger.Error().Err(err).Msg("Failed to initialize primary key info")
 	}
 
+	publicationName := GeneratePublicationName(config.Group)
+	br.Logger.Info().
+		Str("host", config.Host).
+		Int("port", int(config.Port)).
+		Str("database", config.Database).
+		Str("user", config.User).
+		Str("group", config.Group).
+		Str("schema", config.Schema).
+		Strs("tables", config.Tables).
+		Str("publication", publicationName).
+		Msg("Starting PostgreSQL logical replication stream")
+
 	return br
 }
 
@@ -86,9 +98,18 @@ func (r *BaseReplicator) CreatePublication() error {
 func (r *BaseReplicator) buildCreatePublicationQuery() string {
 	publicationName := GeneratePublicationName(r.Config.Group)
 	if len(r.Config.Tables) == 0 {
-		return fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES", publicationName)
+		return fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES",
+			pgx.Identifier{publicationName}.Sanitize())
 	}
-	return fmt.Sprintf("CREATE PUBLICATION \"%s\" FOR TABLE %s", publicationName, pgx.Identifier(r.Config.Tables).Sanitize())
+
+	fullyQualifiedTables := make([]string, len(r.Config.Tables))
+	for i, table := range r.Config.Tables {
+		fullyQualifiedTables[i] = pgx.Identifier{r.Config.Schema, table}.Sanitize()
+	}
+
+	return fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s",
+		pgx.Identifier{publicationName}.Sanitize(),
+		strings.Join(fullyQualifiedTables, ", "))
 }
 
 // checkPublicationExists checks if a publication with the given name exists
@@ -103,6 +124,9 @@ func (r *BaseReplicator) checkPublicationExists(publicationName string) (bool, e
 
 // StartReplicationFromLSN initiates the replication process from a given LSN
 func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN pglogrepl.LSN) error {
+	if err := r.CreatePublication(); err != nil {
+		return err
+	}
 
 	publicationName := GeneratePublicationName(r.Config.Group)
 	err := r.ReplicationConn.StartReplication(ctx, publicationName, startLSN, pglogrepl.StartReplicationOptions{
@@ -168,8 +192,21 @@ func (r *BaseReplicator) ProcessNextMessage(ctx context.Context, lastStatusUpdat
 		if err := r.handleCopyData(ctx, msg, lastStatusUpdate); err != nil {
 			return err
 		}
+	case *pgproto3.CopyDone:
+		r.Logger.Info().Msg("Received CopyDone message")
+	case *pgproto3.ReadyForQuery:
+		r.Logger.Info().Msg("Received ReadyForQuery message")
+	case *pgproto3.ErrorResponse:
+		r.Logger.Error().
+			Str("severity", msg.Severity).
+			Str("code", msg.Code).
+			Str("message", msg.Message).
+			Any("msg", msg).
+			Msg("Received ErrorResponse")
 	default:
-		r.Logger.Warn().Type("message", msg).Msg("Received unexpected message")
+		r.Logger.Warn().
+			Str("type", fmt.Sprintf("%T", msg)).
+			Msg("Received unexpected message type")
 	}
 
 	if time.Since(*lastStatusUpdate) >= standbyMessageTimeout {
@@ -259,7 +296,7 @@ func (r *BaseReplicator) handleRelationMessage(msg *pglogrepl.RelationMessage) {
 }
 
 // HandleBeginMessage handles BeginMessage messages
-func (r *BaseReplicator) HandleBeginMessage(ctx context.Context, msg *pglogrepl.BeginMessage) error {
+func (r *BaseReplicator) HandleBeginMessage(_ context.Context, _ *pglogrepl.BeginMessage) error {
 	return nil
 }
 
@@ -326,7 +363,7 @@ func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl
 func (r *BaseReplicator) HandleCommitMessage(ctx context.Context, msg *pglogrepl.CommitMessage) error {
 	r.LastLSN = msg.CommitLSN
 
-	if err := r.SaveState(msg.CommitLSN); err != nil {
+	if err := r.SaveState(ctx, msg.CommitLSN); err != nil {
 		r.Logger.Error().Err(err).Msg("Failed to save replication state")
 		return err
 	}
@@ -342,7 +379,16 @@ func (r *BaseReplicator) PublishToNATS(ctx context.Context, data utils.CDCMessag
 	}
 
 	subject := fmt.Sprintf("pgflo.%s", r.Config.Group)
-	return r.NATSClient.PublishMessage(subject, binaryData)
+	err = r.NATSClient.PublishMessage(ctx, subject, binaryData)
+	if err != nil {
+		r.Logger.Error().
+			Err(err).
+			Str("subject", subject).
+			Str("group", r.Config.Group).
+			Msg("Failed to publish message to NATS")
+		return err
+	}
+	return nil
 }
 
 // AddPrimaryKeyInfo adds primary key information to the CDCMessage
@@ -481,11 +527,11 @@ func (r *BaseReplicator) getPrimaryKeyColumn(schema, table string) (string, erro
 }
 
 // SaveState saves the current replication state
-func (r *BaseReplicator) SaveState(lsn pglogrepl.LSN) error {
-	return r.NATSClient.SaveState(lsn)
+func (r *BaseReplicator) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
+	return r.NATSClient.SaveState(ctx, lsn)
 }
 
 // GetLastState retrieves the last saved replication state
-func (r *BaseReplicator) GetLastState() (pglogrepl.LSN, error) {
-	return r.NATSClient.GetLastState()
+func (r *BaseReplicator) GetLastState(ctx context.Context) (pglogrepl.LSN, error) {
+	return r.NATSClient.GetLastState(ctx)
 }

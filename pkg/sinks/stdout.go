@@ -12,18 +12,22 @@ type StdoutSink struct{}
 
 // NewStdoutSink creates a new StdoutSink instance
 func NewStdoutSink() (*StdoutSink, error) {
-	sink := &StdoutSink{}
-
-	return sink, nil
+	return &StdoutSink{}, nil
 }
 
 // WriteBatch writes a batch of data to standard output
 func (s *StdoutSink) WriteBatch(messages []*utils.CDCMessage) error {
 	for _, message := range messages {
-		jsonData, err := json.Marshal(message)
+		decodedMessage, err := message.GetDecodedMessage()
+		if err != nil {
+			return fmt.Errorf("failed to get decoded message: %v", err)
+		}
+
+		jsonData, err := json.Marshal(decodedMessage)
 		if err != nil {
 			return fmt.Errorf("failed to marshal data to JSON: %v", err)
 		}
+
 		if _, err := fmt.Println(string(jsonData)); err != nil {
 			return err
 		}

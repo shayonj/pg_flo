@@ -84,21 +84,14 @@ func init() {
 	replicatorCmd.Flags().Bool("copy-and-stream", false, "Enable copy and stream mode (env: PG_FLO_COPY_AND_STREAM)")
 	replicatorCmd.Flags().Int("max-copy-workers-per-table", 4, "Maximum number of copy workers per table (env: PG_FLO_MAX_COPY_WORKERS_PER_TABLE)")
 
-	replicatorCmd.MarkFlagRequired("host")
-	replicatorCmd.MarkFlagRequired("port")
-	replicatorCmd.MarkFlagRequired("dbname")
-	replicatorCmd.MarkFlagRequired("user")
-	replicatorCmd.MarkFlagRequired("password")
-	replicatorCmd.MarkFlagRequired("group")
-	replicatorCmd.MarkFlagRequired("nats-url")
+	markFlagRequired(replicatorCmd, "host", "port", "dbname", "user", "password", "group", "nats-url")
 
 	// Worker flags
 	workerCmd.PersistentFlags().String("group", "", "Group name for worker (env: PG_FLO_GROUP)")
 	workerCmd.PersistentFlags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
 	workerCmd.PersistentFlags().String("rules-config", "", "Path to rules configuration file (env: PG_FLO_RULES_CONFIG)")
 
-	workerCmd.MarkFlagRequired("group")
-	workerCmd.MarkFlagRequired("nats-url")
+	markPersistentFlagRequired(workerCmd, "group", "nats-url")
 
 	// Stdout sink flags
 	stdoutWorkerCmd.Flags().String("stdout-format", "json", "Output format for stdout sink (json or csv) (env: PG_FLO_STDOUT_FORMAT)")
@@ -114,17 +107,14 @@ func init() {
 	postgresWorkerCmd.Flags().String("postgres-password", "", "Target PostgreSQL password (env: PG_FLO_POSTGRES_PASSWORD)")
 	postgresWorkerCmd.Flags().Bool("postgres-sync-schema", false, "Sync schema from source to target (env: PG_FLO_POSTGRES_SYNC_SCHEMA)")
 
-	postgresWorkerCmd.MarkFlagRequired("postgres-host")
-	postgresWorkerCmd.MarkFlagRequired("postgres-dbname")
-	postgresWorkerCmd.MarkFlagRequired("postgres-user")
-	postgresWorkerCmd.MarkFlagRequired("postgres-password")
+	markFlagRequired(postgresWorkerCmd, "postgres-host", "postgres-dbname", "postgres-user", "postgres-password")
 
 	// Webhook sink flags
 	webhookWorkerCmd.Flags().String("webhook-url", "", "Webhook URL to send data (env: PG_FLO_WEBHOOK_URL)")
 	webhookWorkerCmd.Flags().Int("webhook-batch-size", 100, "Number of messages to batch before sending (env: PG_FLO_WEBHOOK_BATCH_SIZE)")
 	webhookWorkerCmd.Flags().Int("webhook-retry-max", 3, "Maximum number of retries for failed requests (env: PG_FLO_WEBHOOK_RETRY_MAX)")
 
-	webhookWorkerCmd.MarkFlagRequired("webhook-url")
+	markFlagRequired(webhookWorkerCmd, "webhook-url")
 
 	// Add subcommands to worker command
 	workerCmd.AddCommand(stdoutWorkerCmd, fileWorkerCmd, postgresWorkerCmd, webhookWorkerCmd)
@@ -170,7 +160,7 @@ func bindFlags(cmd *cobra.Command) {
 	})
 }
 
-func runReplicator(cmd *cobra.Command, args []string) {
+func runReplicator(_ *cobra.Command, _ []string) {
 	config := replicator.Config{
 		Host:     viper.GetString("host"),
 		Port:     uint16(viper.GetInt("port")),
@@ -183,7 +173,11 @@ func runReplicator(cmd *cobra.Command, args []string) {
 	}
 
 	natsURL := viper.GetString("nats-url")
-	natsClient, err := pgflonats.NewNATSClient(natsURL, config.Group, config.Group)
+	if natsURL == "" {
+		log.Fatal().Msg("NATS URL is required")
+	}
+
+	natsClient, err := pgflonats.NewNATSClient(natsURL, fmt.Sprintf("pgflo_%s_stream", config.Group), config.Group)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create NATS client")
 	}
@@ -201,9 +195,13 @@ func runReplicator(cmd *cobra.Command, args []string) {
 	}
 }
 
-func runWorker(cmd *cobra.Command, args []string) {
+func runWorker(cmd *cobra.Command, _ []string) {
 	group := viper.GetString("group")
 	natsURL := viper.GetString("nats-url")
+	if natsURL == "" {
+		log.Fatal().Msg("NATS URL is required")
+	}
+
 	rulesConfigPath := viper.GetString("rules-config")
 	sinkType := cmd.Use
 
@@ -276,5 +274,23 @@ func createSink(sinkType string) (sinks.Sink, error) {
 		)
 	default:
 		return nil, fmt.Errorf("unknown sink type: %s", sinkType)
+	}
+}
+
+// Helper function to mark multiple flags as required
+func markFlagRequired(cmd *cobra.Command, flags ...string) {
+	for _, flag := range flags {
+		if err := cmd.MarkFlagRequired(flag); err != nil {
+			fmt.Printf("Error marking flag %s as required: %v\n", flag, err)
+		}
+	}
+}
+
+// Helper function to mark multiple persistent flags as required
+func markPersistentFlagRequired(cmd *cobra.Command, flags ...string) {
+	for _, flag := range flags {
+		if err := cmd.MarkPersistentFlagRequired(flag); err != nil {
+			fmt.Printf("Error marking persistent flag %s as required: %v\n", flag, err)
+		}
 	}
 }

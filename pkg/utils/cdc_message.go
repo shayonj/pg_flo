@@ -292,3 +292,60 @@ func DecodeArray(data []byte, dataType uint32) (interface{}, error) {
 func EncodeValue(value interface{}, dataType uint32) ([]byte, error) {
 	return ConvertToPgOutput(value, dataType)
 }
+
+// GetDecodedColumnValue returns the decoded value of a column
+func (m *CDCMessage) GetDecodedColumnValue(columnName string) (interface{}, error) {
+	colIndex := m.GetColumnIndex(columnName)
+	if colIndex == -1 {
+		return nil, fmt.Errorf("column %s not found", columnName)
+	}
+
+	var data []byte
+	if m.NewTuple != nil && colIndex < len(m.NewTuple.Columns) {
+		data = m.NewTuple.Columns[colIndex].Data
+	} else if m.OldTuple != nil && colIndex < len(m.OldTuple.Columns) {
+		data = m.OldTuple.Columns[colIndex].Data
+	} else {
+		return nil, fmt.Errorf("no data available for column %s", columnName)
+	}
+
+	column := m.Columns[colIndex]
+	return DecodeValue(data, column.DataType)
+}
+
+// GetDecodedMessage returns a map with decoded column values
+func (m *CDCMessage) GetDecodedMessage() (map[string]interface{}, error) {
+	decodedMessage := make(map[string]interface{})
+	decodedMessage["Type"] = m.Type
+	decodedMessage["Schema"] = m.Schema
+	decodedMessage["Table"] = m.Table
+	decodedMessage["PrimaryKeyColumn"] = m.PrimaryKeyColumn
+	decodedMessage["LSN"] = m.LSN
+	decodedMessage["CommitTimestamp"] = m.CommitTimestamp
+
+	if m.NewTuple != nil {
+		newTuple := make(map[string]interface{})
+		for _, col := range m.Columns {
+			value, err := m.GetDecodedColumnValue(col.Name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode column %s: %v", col.Name, err)
+			}
+			newTuple[col.Name] = value
+		}
+		decodedMessage["NewTuple"] = newTuple
+	}
+
+	if m.OldTuple != nil {
+		oldTuple := make(map[string]interface{})
+		for _, col := range m.Columns {
+			value, err := m.GetDecodedColumnValue(col.Name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode column %s: %v", col.Name, err)
+			}
+			oldTuple[col.Name] = value
+		}
+		decodedMessage["OldTuple"] = oldTuple
+	}
+
+	return decodedMessage, nil
+}

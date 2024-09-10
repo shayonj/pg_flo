@@ -62,8 +62,7 @@ simulate_concurrent_changes() {
 
 start_pg_flo_replication() {
   log "Starting pg_flo replication..."
-
-  $pg_flo_BIN copy-and-stream file \
+  $pg_flo_BIN replicator \
     --host "$PG_HOST" \
     --port "$PG_PORT" \
     --dbname "$PG_DB" \
@@ -72,18 +71,31 @@ start_pg_flo_replication() {
     --group "test_group" \
     --tables "users" \
     --schema "public" \
-    --status-dir "/tmp" \
-    --output-dir "$OUTPUT_DIR" \
-    --max-copy-workers 4 >"$pg_flo_LOG" 2>&1 &
+    --nats-url "$NATS_URL" \
+    --copy-and-stream \
+    --max-copy-workers-per-table 4 \
+    >"$pg_flo_LOG" 2>&1 &
   pg_flo_PID=$!
   log "pg_flo started with PID: $pg_flo_PID"
   success "pg_flo replication started"
 }
 
+start_pg_flo_worker() {
+  log "Starting pg_flo worker with file sink..."
+  $pg_flo_BIN worker file \
+    --group "test_group" \
+    --nats-url "$NATS_URL" \
+    --file-output-dir "$OUTPUT_DIR" \
+    >"$pg_flo_WORKER_LOG" 2>&1 &
+  pg_flo_WORKER_PID=$!
+  log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
+  success "pg_flo worker started"
+}
+
 compare_row_counts() {
   log "Comparing row counts..."
   DB_COUNT=$(run_sql "SELECT COUNT(*) FROM public.users")
-  JSON_COUNT=$(jq -s '[.[] | select(.type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
+  JSON_COUNT=$(jq -s '[.[] | select(.Type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
 
   log "Database row count: $DB_COUNT"
   log "JSON INSERT count: $JSON_COUNT"
@@ -105,10 +117,11 @@ test_pg_flo_cdc() {
   populate_initial_data
 
   start_pg_flo_replication
+  start_pg_flo_worker
   simulate_concurrent_changes
 
   log "Waiting for pg_flo to process changes..."
-  sleep 5
+  sleep 30
 
   stop_pg_flo_gracefully
 

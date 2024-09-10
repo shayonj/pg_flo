@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
@@ -83,7 +84,7 @@ func (s *PostgresSink) handleInsert(tx pgx.Tx, message *utils.CDCMessage) error 
 	for i, col := range message.Columns {
 		columns = append(columns, col.Name)
 		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
-		value, err := message.GetColumnValue(col.Name)
+		value, err := message.GetDecodedColumnValue(col.Name)
 		if err != nil {
 			return fmt.Errorf("failed to get column value: %v", err)
 		}
@@ -167,7 +168,11 @@ func (s *PostgresSink) WriteBatch(messages []*utils.CDCMessage) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback(context.Background())
+	defer func() {
+		if err := tx.Rollback(context.Background()); err != nil && err != pgx.ErrTxClosed {
+			log.Error().Err(err).Msg("failed to rollback transaction")
+		}
+	}()
 
 	for _, message := range messages {
 		var err error

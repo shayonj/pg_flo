@@ -12,7 +12,7 @@ create_users() {
 
 start_pg_flo_replication() {
   log "Starting pg_flo replication..."
-  $pg_flo_BIN stream file \
+  $pg_flo_BIN replicator \
     --host "$PG_HOST" \
     --port "$PG_PORT" \
     --dbname "$PG_DB" \
@@ -21,11 +21,23 @@ start_pg_flo_replication() {
     --group "group-2" \
     --tables "users" \
     --schema "public" \
-    --status-dir "/tmp" \
-    --output-dir "$OUTPUT_DIR" >"$pg_flo_LOG" 2>&1 &
+    --nats-url "$NATS_URL" \
+    >"$pg_flo_LOG" 2>&1 &
   pg_flo_PID=$!
   log "pg_flo started with PID: $pg_flo_PID"
   success "pg_flo replication started"
+}
+
+start_pg_flo_worker() {
+  log "Starting pg_flo worker with file sink..."
+  $pg_flo_BIN worker file \
+    --group "group-2" \
+    --nats-url "$NATS_URL" \
+    --file-output-dir "$OUTPUT_DIR" \
+    >"$pg_flo_WORKER_LOG" 2>&1 &
+  pg_flo_WORKER_PID=$!
+  log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
+  success "pg_flo worker started"
 }
 
 simulate_changes() {
@@ -50,10 +62,10 @@ simulate_changes() {
 }
 
 verify_changes() {
-  log "Verifying changes..."
-  local insert_count=$(jq -s '[.[] | select(.type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
-  local update_count=$(jq -s '[.[] | select(.type == "UPDATE")] | length' "$OUTPUT_DIR"/*.jsonl)
-  local delete_count=$(jq -s '[.[] | select(.type == "DELETE")] | length' "$OUTPUT_DIR"/*.jsonl)
+  log "Verifying changes in ${OUTPUT_DIR}..."
+  local insert_count=$(jq -s '[.[] | select(.Type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
+  local update_count=$(jq -s '[.[] | select(.Type == "UPDATE")] | length' "$OUTPUT_DIR"/*.jsonl)
+  local delete_count=$(jq -s '[.[] | select(.Type == "DELETE")] | length' "$OUTPUT_DIR"/*.jsonl)
 
   log "INSERT count: $insert_count (expected 1000)"
   log "UPDATE count: $update_count (expected 500)"
@@ -73,7 +85,9 @@ test_pg_flo_cdc() {
   setup_postgres
   create_users
   start_pg_flo_replication
-  sleep 1
+  start_pg_flo_worker
+  log "Waiting for replicator to initialize..."
+  sleep 2
   simulate_changes
 
   log "Waiting for pg_flo to process changes..."
