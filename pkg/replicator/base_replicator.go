@@ -309,6 +309,7 @@ func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
 	}
 
+	// todo: write lsn
 	cdcMessage := utils.CDCMessage{
 		Type:     "DELETE",
 		Schema:   relation.Namespace,

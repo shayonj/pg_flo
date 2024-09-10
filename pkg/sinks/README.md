@@ -188,8 +188,6 @@ pg_flo stream webhook \
 `pg_flo` uses a common interface for all sink types, allowing for easy implementation of new sinks. The `Sink` interface defines the following methods:
 
 - `WriteBatch(data []interface{}) error`: Writes a batch of changes to the sink.
-- `GetLastLSN() (pglogrepl.LSN, error)`: Retrieves the last processed LSN (Log Sequence Number).
-- `SetLastLSN(lsn pglogrepl.LSN) error`: Sets the last processed LSN.
 - `Close() error`: Closes the sink, releasing any resources or connections.
 
 Sinks can save the last processed `LSN` at the destination (as appropriate). This ensures that if a `pg_flo` process shuts down (for example, during a deployment) and starts again, it knows where to resume from.
