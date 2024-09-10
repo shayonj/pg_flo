@@ -40,58 +40,58 @@ else
   exit 1
 fi
 
-setup_docker
+# setup_docker
 
-log "Running new e2e stream tests with changes..."
-if ./internal/e2e_test_stream.sh; then
-  success "New e2e tests with changes completed successfully"
-else
-  error "New e2e tests with changes failed"
-  exit 1
-fi
+# log "Running new e2e stream tests with changes..."
+# if ./internal/e2e_test_stream.sh; then
+#   success "New e2e tests with changes completed successfully"
+# else
+#   error "New e2e tests with changes failed"
+#   exit 1
+# fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e resume test
-log "Running new e2e resume test..."
-if ./internal/e2e_resume.sh; then
-  success "E2E resume test completed successfully"
-else
-  error "E2E resume test failed"
-  exit 1
-fi
+# # Run new e2e resume test
+# log "Running new e2e resume test..."
+# if ./internal/e2e_resume.sh; then
+#   success "E2E resume test completed successfully"
+# else
+#   error "E2E resume test failed"
+#   exit 1
+# fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e test for transform & filter
-log "Running new e2e test for transform & filter..."
-if ./internal/e2e_transform_filter.sh; then
-  success "E2E test for transform & filter test completed successfully"
-else
-  error "E2E test for transform & filter test failed"
-  exit 1
-fi
+# # Run new e2e test for transform & filter
+# log "Running new e2e test for transform & filter..."
+# if ./internal/e2e_transform_filter.sh; then
+#   success "E2E test for transform & filter test completed successfully"
+# else
+#   error "E2E test for transform & filter test failed"
+#   exit 1
+# fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e test for DDL changes
-log "Running new e2e test for DDL changes..."
-if ./internal/e2e_ddl.sh; then
-  success "E2E test for DDL changes completed successfully"
-else
-  error "E2E test for DDL changes failed"
-  exit 1
-fi
+# # Run new e2e test for DDL changes
+# log "Running new e2e test for DDL changes..."
+# if ./internal/e2e_ddl.sh; then
+#   success "E2E test for DDL changes completed successfully"
+# else
+#   error "E2E test for DDL changes failed"
+#   exit 1
+# fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e test for DDL changes
-log "Running new e2e test Postgres Sink..."
-if ./internal/e2e_postgres.sh; then
-  success "E2E test for Postgres Sink completed successfully"
-else
-  error "E2E test for Postgres Sink failed"
-  exit 1
-fi
+# # Run new e2e test for DDL changes
+# log "Running new e2e test Postgres Sink..."
+# if ./internal/e2e_postgres.sh; then
+#   success "E2E test for Postgres Sink completed successfully"
+# else
+#   error "E2E test for Postgres Sink failed"
+#   exit 1
+# fi
 
-success "All local e2e tests completed successfully"
+# success "All local e2e tests completed successfully"

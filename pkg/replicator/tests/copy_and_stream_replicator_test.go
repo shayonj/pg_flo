@@ -21,37 +21,6 @@ import (
 )
 
 func TestCopyAndStreamReplicator(t *testing.T) {
-	t.Run("CreatePublication", func(t *testing.T) {
-		mockStandardConn := new(MockStandardConnection)
-
-		mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).Return(MockRow{
-			scanFunc: func(dest ...interface{}) error {
-				*dest[0].(*bool) = false
-				return nil
-			},
-		})
-
-		mockStandardConn.On("Exec", mock.Anything, mock.Anything, mock.Anything).Return(pgconn.CommandTag{}, nil)
-
-		mockNATSClient := new(MockNATSClient)
-
-		csr := &replicator.CopyAndStreamReplicator{
-			BaseReplicator: replicator.BaseReplicator{
-				StandardConn: mockStandardConn,
-				Config: replicator.Config{
-					Group:  "test_publication",
-					Tables: []string{"users"},
-					Schema: "public",
-				},
-				Logger:     zerolog.Nop(),
-				NATSClient: mockNATSClient,
-			},
-		}
-
-		err := csr.CreatePublication()
-		assert.NoError(t, err)
-		mockStandardConn.AssertExpectations(t)
-	})
 
 	t.Run("StartReplication", func(t *testing.T) {
 		mockReplicationConn := new(MockReplicationConnection)
@@ -59,12 +28,19 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockNATSClient := new(MockNATSClient)
 		mockTx := new(MockTx)
 
+		mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).Return(MockRow{
+			scanFunc: func(dest ...interface{}) error {
+				*dest[0].(*bool) = true
+				return nil
+			},
+		}).Once()
+
 		mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", mock.Anything).Return(MockRow{
 			scanFunc: func(dest ...interface{}) error {
 				*dest[0].(*bool) = false
 				return nil
 			},
-		})
+		}).Once()
 
 		mockReplicationConn.On("CreateReplicationSlot", mock.Anything, mock.Anything).Return(pglogrepl.CreateReplicationSlotResult{}, nil)
 		mockReplicationConn.On("StartReplication", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -166,7 +142,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockTx.On("Commit", mock.Anything).Return(nil)
 		mockPoolConn.On("Release").Return()
 
-		mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+		mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
 			var decodedMsg utils.CDCMessage
 			err := decodedMsg.UnmarshalBinary(data)
 			if err != nil {
@@ -205,6 +181,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					User:     "testuser",
 					Password: "testpassword",
 					Database: "testdb",
+					Group:    "test_group",
 				},
 			},
 			MaxCopyWorkersPerTable: 2,
@@ -260,7 +237,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockTx.On("Commit", mock.Anything).Return(nil)
 		mockPoolConn.On("Release").Return()
 
-		mockNATSClient.On("PublishMessage", mock.Anything, mock.Anything).Return(nil)
+		mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.Anything).Return(nil)
 
 		csr := &replicator.CopyAndStreamReplicator{
 			BaseReplicator: replicator.BaseReplicator{
@@ -275,6 +252,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					User:     "testuser",
 					Password: "testpassword",
 					Database: "testdb",
+					Group:    "test_group",
 				},
 			},
 		}
@@ -381,7 +359,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				mockTx.On("Commit", mock.Anything).Return(nil)
 				mockPoolConn.On("Release").Return()
 
-				mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+				mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
 					var decodedMsg utils.CDCMessage
 					err := decodedMsg.UnmarshalBinary(data)
 					assert.NoError(t, err, "Failed to unmarshal binary data")
@@ -444,6 +422,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 							User:     "testuser",
 							Password: "testpassword",
 							Database: "testdb",
+							Group:    "test_group",
 						},
 					},
 				}

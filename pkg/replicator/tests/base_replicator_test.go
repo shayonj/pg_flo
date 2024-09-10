@@ -89,7 +89,8 @@ func TestBaseReplicator(t *testing.T) {
 						return nil
 					},
 				})
-			mockStandardConn.On("Exec", mock.Anything, "CREATE PUBLICATION new_pub_publication FOR ALL TABLES", mock.Anything).
+			expectedQuery := `CREATE PUBLICATION "pg_flo_new_pub_publication" FOR ALL TABLES`
+			mockStandardConn.On("Exec", mock.Anything, expectedQuery, mock.Anything).
 				Return(pgconn.CommandTag{}, nil)
 
 			br := &replicator.BaseReplicator{
@@ -105,19 +106,25 @@ func TestBaseReplicator(t *testing.T) {
 
 		t.Run("Publication created for specific tables", func(t *testing.T) {
 			mockStandardConn := new(MockStandardConnection)
-			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
+
+			// Mock the check for existing publication
+			mockStandardConn.On("QueryRow", mock.Anything, mock.AnythingOfType("string"), mock.Anything).
 				Return(MockRow{
 					scanFunc: func(dest ...interface{}) error {
 						*dest[0].(*bool) = false
 						return nil
 					},
 				})
-			mockStandardConn.On("Exec", mock.Anything, mock.AnythingOfType("string"), mock.Anything).
+
+			// Mock the creation of the publication
+			expectedQuery := `CREATE PUBLICATION "pg_flo_new_pub_publication" FOR TABLE "public"."users", "public"."orders"`
+			mockStandardConn.On("Exec", mock.Anything, expectedQuery, mock.Anything).
 				Return(pgconn.CommandTag{}, nil)
 
 			br := &replicator.BaseReplicator{
 				Config: replicator.Config{
 					Group:  "new_pub",
+					Schema: "public",
 					Tables: []string{"users", "orders"},
 				},
 				StandardConn: mockStandardConn,
@@ -159,11 +166,12 @@ func TestBaseReplicator(t *testing.T) {
 						return nil
 					},
 				})
-			mockStandardConn.On("Exec", mock.Anything, "CREATE PUBLICATION new_pub_publication FOR ALL TABLES", mock.Anything).
+			expectedQuery := `CREATE PUBLICATION "pg_flo_new_pub_publication" FOR ALL TABLES`
+			mockStandardConn.On("Exec", mock.Anything, expectedQuery, mock.Anything).
 				Return(pgconn.CommandTag{}, errors.New("creation error"))
 
 			br := &replicator.BaseReplicator{
-				Config:       replicator.Config{Group: "new-pub"},
+				Config:       replicator.Config{Group: "new_pub"},
 				StandardConn: mockStandardConn,
 				Logger:       zerolog.Nop(),
 			}
@@ -178,7 +186,17 @@ func TestBaseReplicator(t *testing.T) {
 	t.Run("StartReplicationFromLSN", func(t *testing.T) {
 		t.Run("Successful start of replication", func(t *testing.T) {
 			mockReplicationConn := new(MockReplicationConnection)
+			mockStandardConn := new(MockStandardConnection)
 			mockNATSClient := new(MockNATSClient)
+
+			// Mock CreatePublication
+			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
+				Return(MockRow{
+					scanFunc: func(dest ...interface{}) error {
+						*dest[0].(*bool) = true // Publication already exists
+						return nil
+					},
+				})
 
 			mockReplicationConn.On("StartReplication", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -213,6 +231,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
+				StandardConn:    mockStandardConn,
 				NATSClient:      mockNATSClient,
 				Config:          replicator.Config{Group: "test_pub"},
 				Logger:          zerolog.Nop(),
@@ -224,22 +243,36 @@ func TestBaseReplicator(t *testing.T) {
 			err := br.StartReplicationFromLSN(ctx, pglogrepl.LSN(0))
 			assert.NoError(t, err, "Expected no error for graceful shutdown")
 			mockReplicationConn.AssertExpectations(t)
+			mockStandardConn.AssertExpectations(t)
 			mockNATSClient.AssertExpectations(t)
 		})
 
 		t.Run("Error occurs while starting replication", func(t *testing.T) {
 			mockReplicationConn := new(MockReplicationConnection)
+			mockStandardConn := new(MockStandardConnection)
+
+			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
+				Return(MockRow{
+					scanFunc: func(dest ...interface{}) error {
+						*dest[0].(*bool) = true
+						return nil
+					},
+				})
+
 			mockReplicationConn.On("StartReplication", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("start replication error"))
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
+				StandardConn:    mockStandardConn,
 				Config:          replicator.Config{Group: "test_pub"},
+				Logger:          zerolog.Nop(),
 			}
 
 			err := br.StartReplicationFromLSN(context.Background(), pglogrepl.LSN(0))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to start replication")
 			mockReplicationConn.AssertExpectations(t)
+			mockStandardConn.AssertExpectations(t)
 		})
 	})
 
@@ -389,7 +422,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -564,7 +597,7 @@ func TestBaseReplicator(t *testing.T) {
 						msg.Tuple.Columns[i] = &pglogrepl.TupleDataColumn{Data: data}
 					}
 
-					mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+					mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 						var decodedMsg utils.CDCMessage
 						err := decodedMsg.UnmarshalBinary(data)
 						if err != nil {
@@ -658,7 +691,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -725,7 +758,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -786,7 +819,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -830,14 +863,15 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
+				Logger:     zerolog.Nop(),
 			}
 
 			msg := &pglogrepl.CommitMessage{
-				CommitTime:        time.Now(),
-				TransactionEndLSN: 12345,
+				CommitTime: time.Now(),
+				CommitLSN:  12345,
 			}
 
-			mockNATSClient.On("SaveState", mock.AnythingOfType("pglogrepl.LSN")).Return(nil)
+			mockNATSClient.On("SaveState", mock.Anything, pglogrepl.LSN(12345)).Return(nil)
 
 			ctx := context.Background()
 			err := br.HandleCommitMessage(ctx, msg)
@@ -874,7 +908,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -933,7 +967,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, mock.Anything).Return(errors.New("failed to publish message"))
+			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.Anything).Return(errors.New("failed to publish message"))
 
 			ctx := context.Background()
 			err := br.PublishToNATS(ctx, data)

@@ -20,7 +20,6 @@ func (re *RuleEngine) ApplyRules(message *utils.CDCMessage) (*utils.CDCMessage, 
 
 	rules, exists := re.Rules[message.Table]
 	if !exists {
-		logger.Info().Str("table", message.Table).Msg("No rules found for table")
 		return message, nil // No rules for this table
 	}
 

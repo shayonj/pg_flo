@@ -1,6 +1,7 @@
 package pgflonats
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/jackc/pglogrepl"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 const (
@@ -15,9 +17,10 @@ const (
 	envNATSURL     = "PG_FLO_NATS_URL"
 )
 
+// NATSClient represents a client for interacting with NATS
 type NATSClient struct {
 	conn        *nats.Conn
-	js          nats.JetStreamContext
+	js          jetstream.JetStream
 	stream      string
 	stateBucket string
 }
@@ -39,7 +42,7 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
-		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			fmt.Printf("Disconnected due to: %s, will attempt reconnects\n", err)
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
@@ -53,21 +56,31 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
 	}
 
-	stateBucket := fmt.Sprintf("pg_flo_state_%s", group)
+	// Create the main stream
+	streamConfig := jetstream.StreamConfig{
+		Name:      stream,
+		Subjects:  []string{fmt.Sprintf("pgflo.%s", group)},
+		Storage:   jetstream.FileStorage,
+		Retention: jetstream.LimitsPolicy,
+		MaxAge:    24 * time.Hour,
+	}
+	_, err = js.CreateStream(context.Background(), streamConfig)
+	if err != nil && err != jetstream.ErrStreamNameAlreadyInUse {
+		return nil, fmt.Errorf("failed to create main stream: %w", err)
+	}
 
-	_, err = js.AddStream(&nats.StreamConfig{
-		Name:     stateBucket,
-		Subjects: []string{stateBucket},
-		Storage:  nats.FileStorage,
-		Replicas: 1, // TODO - Adjust based on NATS JetStream setup
+	// Create the state bucket
+	stateBucket := fmt.Sprintf("pg_flo_state_%s", group)
+	_, err = js.CreateKeyValue(context.Background(), jetstream.KeyValueConfig{
+		Bucket: stateBucket,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create state stream: %w", err)
+	if err != nil && err != jetstream.ErrConsumerNameAlreadyInUse {
+		return nil, fmt.Errorf("failed to create state bucket: %w", err)
 	}
 
 	return &NATSClient{
@@ -79,8 +92,8 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 }
 
 // PublishMessage publishes a message to the specified NATS subject
-func (nc *NATSClient) PublishMessage(subject string, data []byte) error {
-	_, err := nc.js.Publish(subject, data)
+func (nc *NATSClient) PublishMessage(ctx context.Context, subject string, data []byte) error {
+	_, err := nc.js.Publish(ctx, subject, data)
 	if err != nil {
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
@@ -94,80 +107,72 @@ func (nc *NATSClient) Close() error {
 }
 
 // GetStreamInfo retrieves information about the NATS stream
-func (nc *NATSClient) GetStreamInfo() (*nats.StreamInfo, error) {
-	return nc.js.StreamInfo(nc.stream)
+func (nc *NATSClient) GetStreamInfo(ctx context.Context) (*jetstream.StreamInfo, error) {
+	stream, err := nc.js.Stream(ctx, nc.stream)
+	if err != nil {
+		return nil, err
+	}
+	return stream.Info(ctx)
 }
 
 // PurgeStream purges all messages from the NATS stream
-func (nc *NATSClient) PurgeStream() error {
-	return nc.js.PurgeStream(nc.stream)
+func (nc *NATSClient) PurgeStream(ctx context.Context) error {
+	stream, err := nc.js.Stream(ctx, nc.stream)
+	if err != nil {
+		return err
+	}
+	return stream.Purge(ctx)
 }
 
 // DeleteStream deletes the NATS stream
-func (nc *NATSClient) DeleteStream() error {
-	return nc.js.DeleteStream(nc.stream)
+func (nc *NATSClient) DeleteStream(ctx context.Context) error {
+	return nc.js.DeleteStream(ctx, nc.stream)
 }
 
 // SaveState saves the current replication state to NATS
-func (nc *NATSClient) SaveState(lsn pglogrepl.LSN) error {
-	state := struct {
-		LSN pglogrepl.LSN `json:"lsn"`
-	}{LSN: lsn}
+func (nc *NATSClient) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
+	kv, err := nc.js.KeyValue(ctx, nc.stateBucket)
+	if err != nil {
+		return fmt.Errorf("failed to get KV bucket: %v", err)
+	}
 
-	data, err := json.Marshal(state)
+	data, err := json.Marshal(lsn)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %v", err)
 	}
 
-	_, err = nc.js.Publish(nc.stateBucket, data)
+	_, err = kv.Put(ctx, "lsn", data)
 	if err != nil {
-		return fmt.Errorf("failed to publish state: %v", err)
+		return fmt.Errorf("failed to save state: %v", err)
 	}
 
 	return nil
 }
 
 // GetLastState retrieves the last saved replication state from NATS
-func (nc *NATSClient) GetLastState() (pglogrepl.LSN, error) {
-	info, err := nc.js.StreamInfo(nc.stateBucket)
+func (nc *NATSClient) GetLastState(ctx context.Context) (pglogrepl.LSN, error) {
+	kv, err := nc.js.KeyValue(ctx, nc.stateBucket)
 	if err != nil {
-		if err == nats.ErrStreamNotFound {
-			return 0, nil // No stream yet, start from the beginning
+		return 0, fmt.Errorf("failed to get KV bucket: %v", err)
+	}
+
+	entry, err := kv.Get(ctx, "lsn")
+	if err != nil {
+		if err == jetstream.ErrKeyNotFound {
+			return 0, nil // No state yet, start from the beginning
 		}
-		return 0, fmt.Errorf("failed to get stream info: %v", err)
-	}
-
-	if info.State.LastSeq == 0 {
-		return 0, nil
-	}
-
-	msg, err := nc.js.GetMsg(nc.stateBucket, info.State.LastSeq)
-	if err != nil {
 		return 0, fmt.Errorf("failed to get last state: %v", err)
 	}
 
-	var state struct {
-		LSN pglogrepl.LSN `json:"lsn"`
-	}
-	if err := json.Unmarshal(msg.Data, &state); err != nil {
+	var lsn pglogrepl.LSN
+	if err := json.Unmarshal(entry.Value(), &lsn); err != nil {
 		return 0, fmt.Errorf("failed to unmarshal state: %v", err)
 	}
 
-	return state.LSN, nil
+	return lsn, nil
 }
 
-func (nc *NATSClient) CreateConsumer(consumerName string) (*nats.ConsumerInfo, error) {
-	_, err := nc.js.AddConsumer(nc.stream, &nats.ConsumerConfig{
-		Durable:       consumerName,
-		AckPolicy:     nats.AckExplicitPolicy,
-		DeliverPolicy: nats.DeliverAllPolicy,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create consumer: %w", err)
-	}
-	return nc.js.ConsumerInfo(nc.stream, consumerName)
-}
-
-func (nc *NATSClient) Subscribe(stream, consumer string, handler nats.MsgHandler) (*nats.Subscription, error) {
-	return nc.js.QueueSubscribe(stream, consumer, handler, nats.Durable(consumer), nats.ManualAck())
+// JetStream returns the JetStream context
+func (nc *NATSClient) JetStream() jetstream.JetStream {
+	return nc.js
 }

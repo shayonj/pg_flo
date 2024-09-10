@@ -15,11 +15,6 @@ type StreamReplicator struct {
 	DDLReplicator DDLReplicator
 }
 
-// CreatePublication creates a new publication for the specified tables.
-func (r *StreamReplicator) CreatePublication() error {
-	return r.BaseReplicator.CreatePublication()
-}
-
 // StartReplication begins the replication process.
 func (r *StreamReplicator) StartReplication() error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -54,7 +49,7 @@ func (r *StreamReplicator) StartReplication() error {
 		}
 	}()
 
-	startLSN, err := r.getStartLSN()
+	startLSN, err := r.getStartLSN(ctx)
 	if err != nil {
 		return err
 	}
@@ -71,8 +66,8 @@ func (r *StreamReplicator) handleShutdownSignal(sigChan <-chan os.Signal, cancel
 }
 
 // getStartLSN determines the starting LSN for replication.
-func (r *StreamReplicator) getStartLSN() (pglogrepl.LSN, error) {
-	startLSN, err := r.BaseReplicator.GetLastState()
+func (r *StreamReplicator) getStartLSN(ctx context.Context) (pglogrepl.LSN, error) {
+	startLSN, err := r.BaseReplicator.GetLastState(ctx)
 	if err != nil {
 		r.Logger.Warn().Err(err).Msg("Failed to get last LSN, starting from 0")
 		return pglogrepl.LSN(0), nil
