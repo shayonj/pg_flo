@@ -254,33 +254,45 @@ func DecodeArray(data []byte, dataType uint32) (interface{}, error) {
 
 	switch dataType {
 	case pgtype.Int2ArrayOID, pgtype.Int4ArrayOID, pgtype.Int8ArrayOID:
-		result := make([]int64, len(elements))
+		result := make([]interface{}, len(elements))
 		for i, elem := range elements {
-			val, err := strconv.ParseInt(elem, 10, 64)
-			if err != nil {
-				return nil, err
+			if elem == "NULL" {
+				result[i] = nil
+			} else {
+				val, err := strconv.ParseInt(elem, 10, 64)
+				if err != nil {
+					return nil, err
+				}
+				result[i] = val
 			}
-			result[i] = val
 		}
 		return result, nil
 	case pgtype.Float4ArrayOID, pgtype.Float8ArrayOID:
-		result := make([]float64, len(elements))
+		result := make([]interface{}, len(elements))
 		for i, elem := range elements {
-			val, err := strconv.ParseFloat(elem, 64)
-			if err != nil {
-				return nil, err
+			if elem == "NULL" {
+				result[i] = nil
+			} else {
+				val, err := strconv.ParseFloat(elem, 64)
+				if err != nil {
+					return nil, err
+				}
+				result[i] = val
 			}
-			result[i] = val
 		}
 		return result, nil
 	case pgtype.BoolArrayOID:
-		result := make([]bool, len(elements))
+		result := make([]interface{}, len(elements))
 		for i, elem := range elements {
-			val, err := strconv.ParseBool(elem)
-			if err != nil {
-				return nil, err
+			if elem == "NULL" {
+				result[i] = nil
+			} else {
+				val, err := strconv.ParseBool(elem)
+				if err != nil {
+					return nil, err
+				}
+				result[i] = val
 			}
-			result[i] = val
 		}
 		return result, nil
 	default:

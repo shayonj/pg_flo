@@ -78,7 +78,11 @@ func EncodeArray(value interface{}) ([]byte, error) {
 	var elements []string
 	for i := 0; i < v.Len(); i++ {
 		elem := v.Index(i).Interface()
-		elements = append(elements, fmt.Sprintf("%v", elem))
+		if elem == nil {
+			elements = append(elements, "NULL")
+		} else {
+			elements = append(elements, fmt.Sprintf("%v", elem))
+		}
 	}
 
 	return []byte("{" + strings.Join(elements, ",") + "}"), nil
