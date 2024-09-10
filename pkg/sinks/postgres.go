@@ -7,17 +7,13 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
-	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 // PostgresSink represents a sink for PostgreSQL database
 type PostgresSink struct {
-	conn        *pgx.Conn
-	lastLSN     pglogrepl.LSN
-	statusTable string
+	conn *pgx.Conn
 }
 
 // NewPostgresSink creates a new PostgresSink instance
@@ -33,22 +29,13 @@ func NewPostgresSink(targetHost string, targetPort int, targetDBName, targetUser
 	}
 
 	sink := &PostgresSink{
-		conn:        conn,
-		statusTable: "internal_pg_flo.lsn_status",
+		conn: conn,
 	}
 
 	if syncSchema {
 		if err := sink.syncSchema(sourceHost, sourcePort, sourceDBName, sourceUser, sourcePassword); err != nil {
 			return nil, err
 		}
-	}
-
-	if err := sink.setupStatusTable(); err != nil {
-		return nil, err
-	}
-
-	if err := sink.loadStatus(); err != nil {
-		log.Warn().Err(err).Msg("Failed to load status, starting from scratch")
 	}
 
 	return sink, nil
@@ -85,41 +72,6 @@ func (s *PostgresSink) syncSchema(sourceHost string, sourcePort int, sourceDBNam
 	}
 
 	return nil
-}
-
-// setupStatusTable creates the status table if it doesn't exist
-func (s *PostgresSink) setupStatusTable() error {
-	_, err := s.conn.Exec(context.Background(), `
-		CREATE SCHEMA IF NOT EXISTS internal_pg_flo;
-		CREATE TABLE IF NOT EXISTS internal_pg_flo.lsn_status (
-			id SERIAL PRIMARY KEY,
-			last_lsn TEXT NOT NULL
-		);
-	`)
-	return err
-}
-
-// loadStatus loads the last known LSN from the status table
-func (s *PostgresSink) loadStatus() error {
-	var lastLSN string
-	err := s.conn.QueryRow(context.Background(), "SELECT last_lsn FROM internal_pg_flo.lsn_status ORDER BY id DESC LIMIT 1").Scan(&lastLSN)
-	if err != nil {
-		return fmt.Errorf("failed to load last LSN: %v", err)
-	}
-
-	lsn, err := pglogrepl.ParseLSN(lastLSN)
-	if err != nil {
-		return fmt.Errorf("failed to parse last LSN: %v", err)
-	}
-
-	s.lastLSN = lsn
-	return nil
-}
-
-// saveStatus saves the current LSN to the status table
-func (s *PostgresSink) saveStatus() error {
-	_, err := s.conn.Exec(context.Background(), "INSERT INTO internal_pg_flo.lsn_status (last_lsn) VALUES ($1)", s.lastLSN.String())
-	return err
 }
 
 // handleInsert processes an insert operation
@@ -210,19 +162,14 @@ func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) error {
 }
 
 // WriteBatch writes a batch of CDC messages to the target database
-func (s *PostgresSink) WriteBatch(data []interface{}) error {
+func (s *PostgresSink) WriteBatch(messages []*utils.CDCMessage) error {
 	tx, err := s.conn.Begin(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %v", err)
 	}
 	defer tx.Rollback(context.Background())
 
-	for _, item := range data {
-		message, ok := item.(*utils.CDCMessage)
-		if !ok {
-			return fmt.Errorf("failed to cast item to *utils.CDCMessage")
-		}
-
+	for _, message := range messages {
 		var err error
 		switch message.Type {
 		case "INSERT":
@@ -247,17 +194,6 @@ func (s *PostgresSink) WriteBatch(data []interface{}) error {
 	}
 
 	return nil
-}
-
-// GetLastLSN returns the last processed LSN
-func (s *PostgresSink) GetLastLSN() (pglogrepl.LSN, error) {
-	return s.lastLSN, nil
-}
-
-// SetLastLSN sets the last processed LSN and saves it to the status table
-func (s *PostgresSink) SetLastLSN(lsn pglogrepl.LSN) error {
-	s.lastLSN = lsn
-	return s.saveStatus()
 }
 
 // Close closes the database connection

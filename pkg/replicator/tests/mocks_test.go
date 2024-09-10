@@ -98,16 +98,6 @@ func (m *MockSink) WriteBatch(data []interface{}) error {
 	return args.Error(0)
 }
 
-func (m *MockSink) GetLastLSN() (pglogrepl.LSN, error) {
-	args := m.Called()
-	return args.Get(0).(pglogrepl.LSN), args.Error(1)
-}
-
-func (m *MockSink) SetLastLSN(lsn pglogrepl.LSN) error {
-	args := m.Called(lsn)
-	return args.Error(0)
-}
-
 func (m *MockSink) Close() error {
 	args := m.Called()
 	return args.Error(0)

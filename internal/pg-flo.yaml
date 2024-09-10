@@ -1,32 +1,40 @@
 # PostgreSQL connection settings
-host: "localhost" # PostgreSQL host (or use PGHOST env var)
-port: 5432 # PostgreSQL port (or use PGPORT env var)
-dbname: "your_database" # PostgreSQL database name (or use PGDATABASE env var)
-user: "your_user" # PostgreSQL user (or use PGUSER env var)
-password: "your_password" # PostgreSQL password (or use PGPASSWORD env var)
-schema: "public" # PostgreSQL schema to replicate from (default is "public")
+host: "localhost" # PostgreSQL host (env: PG_FLO_HOST)
+port: 5432 # PostgreSQL port (env: PG_FLO_PORT)
+dbname: "your_database" # PostgreSQL database name (env: PG_FLO_DBNAME)
+user: "your_user" # PostgreSQL user (env: PG_FLO_USER)
+password: "your_password" # PostgreSQL password (env: PG_FLO_PASSWORD)
+schema: "public" # PostgreSQL schema to replicate from (env: PG_FLO_SCHEMA)
 
 # Replication settings
-group: "your_group" # Group name to identify each replication, replicating given or all tables in the database
-tables: # Tables to replicate (empty for all tables)
+group: "your_group" # Group name to identify each replication (env: PG_FLO_GROUP)
+tables: # Tables to replicate (empty for all tables) (env: PG_FLO_TABLES)
   - "table1"
   - "table2"
-copy-and-stream: false # Enable copy and stream mode
-max-copy-workers: 4 # Maximum number of parallel workers for copy operation
+copy-and-stream: false # Enable copy and stream mode (env: PG_FLO_COPY_AND_STREAM)
+max-copy-workers-per-table: 4 # Maximum number of parallel workers for copy operation (env: PG_FLO_MAX_COPY_WORKERS_PER_TABLE)
 
-# Status and output settings
-status-dir: "/tmp/pg_flo-status" # Directory to store status files
-sink: "stdout" # Sink type (stdout, file, or postgres)
-output-dir: "/tmp/pg_flo-output" # Output directory for file sink
+# NATS settings
+nats-url: "nats://localhost:4222" # NATS server URL (env: PG_FLO_NATS_URL)
 
-# Target PostgreSQL settings (for postgres sink)
-target-host: "" # Target PostgreSQL host
-target-port: 5432 # Target PostgreSQL port
-target-dbname: "" # Target PostgreSQL database name
-target-user: "" # Target PostgreSQL user
-target-password: "" # Target PostgreSQL password
-sync-schema: false # Sync schema from source to target
+# Worker settings
+rules-config: "/path/to/rules-config.yaml" # Path to rules configuration file (env: PG_FLO_RULES_CONFIG)
 
-# Rules configuration
-rules-config: "/path/to/rules-config.yaml" # Path to rules configuration file
-track-ddl: false # Enable DDL tracking
+# Stdout sink settings
+stdout-format: "json" # Output format for stdout sink (json or csv) (env: PG_FLO_STDOUT_FORMAT)
+
+# File sink settings
+file-output-dir: "/tmp/pg_flo-output" # Output directory for file sink (env: PG_FLO_FILE_OUTPUT_DIR)
+
+# Postgres sink settings
+postgres-host: "" # Target PostgreSQL host (env: PG_FLO_POSTGRES_HOST)
+postgres-port: 5432 # Target PostgreSQL port (env: PG_FLO_POSTGRES_PORT)
+postgres-dbname: "" # Target PostgreSQL database name (env: PG_FLO_POSTGRES_DBNAME)
+postgres-user: "" # Target PostgreSQL user (env: PG_FLO_POSTGRES_USER)
+postgres-password: "" # Target PostgreSQL password (env: PG_FLO_POSTGRES_PASSWORD)
+postgres-sync-schema: false # Sync schema from source to target (env: PG_FLO_POSTGRES_SYNC_SCHEMA)
+
+# Webhook sink settings
+webhook-url: "" # Webhook URL to send data (env: PG_FLO_WEBHOOK_URL)
+webhook-batch-size: 100 # Number of messages to batch before sending (env: PG_FLO_WEBHOOK_BATCH_SIZE)
+webhook-retry-max: 3 # Maximum number of retries for failed requests (env: PG_FLO_WEBHOOK_RETRY_MAX)
