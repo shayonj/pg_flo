@@ -26,6 +26,10 @@ func (r *StreamReplicator) StartReplication() error {
 
 	go r.handleShutdownSignal(sigChan, cancel)
 
+	if err := r.BaseReplicator.CreatePublication(); err != nil {
+		return fmt.Errorf("failed to create publication: %v", err)
+	}
+
 	if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
 		return fmt.Errorf("failed to create replication slot: %v", err)
 	}
@@ -48,6 +52,10 @@ func (r *StreamReplicator) StartReplication() error {
 			}
 		}
 	}()
+
+	if err := r.BaseReplicator.CheckReplicationSlotStatus(ctx); err != nil {
+		return fmt.Errorf("failed to check replication slot status: %v", err)
+	}
 
 	startLSN, err := r.getStartLSN(ctx)
 	if err != nil {

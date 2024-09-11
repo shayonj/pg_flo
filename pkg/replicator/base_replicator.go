@@ -124,11 +124,8 @@ func (r *BaseReplicator) checkPublicationExists(publicationName string) (bool, e
 
 // StartReplicationFromLSN initiates the replication process from a given LSN
 func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN pglogrepl.LSN) error {
-	if err := r.CreatePublication(); err != nil {
-		return err
-	}
-
 	publicationName := GeneratePublicationName(r.Config.Group)
+	r.Logger.Info().Str("startLSN", startLSN.String()).Str("publication", publicationName).Msg("Starting replication")
 	err := r.ReplicationConn.StartReplication(ctx, publicationName, startLSN, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{
 			"proto_version '1'",
@@ -308,11 +305,12 @@ func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:     "INSERT",
-		Schema:   relation.Namespace,
-		Table:    relation.RelationName,
-		Columns:  relation.Columns,
-		NewTuple: msg.Tuple,
+		Type:      "INSERT",
+		Schema:    relation.Namespace,
+		Table:     relation.RelationName,
+		Columns:   relation.Columns,
+		EmittedAt: time.Now(),
+		NewTuple:  msg.Tuple,
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -348,11 +346,12 @@ func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl
 
 	// todo: write lsn
 	cdcMessage := utils.CDCMessage{
-		Type:     "DELETE",
-		Schema:   relation.Namespace,
-		Table:    relation.RelationName,
-		Columns:  relation.Columns,
-		OldTuple: msg.OldTuple,
+		Type:      "DELETE",
+		Schema:    relation.Namespace,
+		Table:     relation.RelationName,
+		Columns:   relation.Columns,
+		OldTuple:  msg.OldTuple,
+		EmittedAt: time.Now(),
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -528,10 +527,33 @@ func (r *BaseReplicator) getPrimaryKeyColumn(schema, table string) (string, erro
 
 // SaveState saves the current replication state
 func (r *BaseReplicator) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
-	return r.NATSClient.SaveState(ctx, lsn)
+	state, err := r.NATSClient.GetState(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current state: %w", err)
+	}
+	state.LSN = lsn
+	return r.NATSClient.SaveState(ctx, state)
 }
 
 // GetLastState retrieves the last saved replication state
 func (r *BaseReplicator) GetLastState(ctx context.Context) (pglogrepl.LSN, error) {
-	return r.NATSClient.GetLastState(ctx)
+	state, err := r.NATSClient.GetState(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get state: %w", err)
+	}
+	return state.LSN, nil
+}
+
+// CheckReplicationSlotStatus checks the status of the replication slot
+func (r *BaseReplicator) CheckReplicationSlotStatus(ctx context.Context) error {
+	publicationName := GeneratePublicationName(r.Config.Group)
+	var restartLSN string
+	err := r.StandardConn.QueryRow(ctx,
+		"SELECT restart_lsn FROM pg_replication_slots WHERE slot_name = $1",
+		publicationName).Scan(&restartLSN)
+	if err != nil {
+		return fmt.Errorf("failed to query replication slot status: %w", err)
+	}
+	r.Logger.Info().Str("slotName", publicationName).Str("restartLSN", restartLSN).Msg("Replication slot status")
+	return nil
 }

@@ -16,7 +16,6 @@
 
    - If no valid LSN (Log Sequence Number) is found in the target sink, `pg_flo` performs an initial bulk copy of existing data.
    - This process is parallelized for fast data sync:
-     - Tables are analyzed to optimize the copy process.
      - A snapshot is taken to ensure consistency.
      - Each table is divided into page ranges.
      - Multiple workers copy different ranges concurrently.

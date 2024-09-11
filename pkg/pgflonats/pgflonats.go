@@ -25,7 +25,13 @@ type NATSClient struct {
 	stateBucket string
 }
 
-// NewNATSClient creates a new NATS client with the specified configuration
+// State represents the current state of the replication process
+type State struct {
+	LSN              pglogrepl.LSN `json:"lsn"`
+	LastProcessedSeq uint64        `json:"last_processed_seq"`
+}
+
+// NewNATSClient creates a new NATS client with the specified configuration, setting up the connection, main stream, and state bucket.
 func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 	if url == "" {
 		url = os.Getenv(envNATSURL)
@@ -79,7 +85,7 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 	_, err = js.CreateKeyValue(context.Background(), jetstream.KeyValueConfig{
 		Bucket: stateBucket,
 	})
-	if err != nil && err != jetstream.ErrConsumerNameAlreadyInUse {
+	if err != nil && err != jetstream.ErrBucketExists {
 		return nil, fmt.Errorf("failed to create state bucket: %w", err)
 	}
 
@@ -91,7 +97,7 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 	}, nil
 }
 
-// PublishMessage publishes a message to the specified NATS subject
+// PublishMessage publishes a message to the specified NATS subject.
 func (nc *NATSClient) PublishMessage(ctx context.Context, subject string, data []byte) error {
 	_, err := nc.js.Publish(ctx, subject, data)
 	if err != nil {
@@ -100,13 +106,13 @@ func (nc *NATSClient) PublishMessage(ctx context.Context, subject string, data [
 	return nil
 }
 
-// Close closes the NATS connection
+// Close closes the NATS connection.
 func (nc *NATSClient) Close() error {
 	nc.conn.Close()
 	return nil
 }
 
-// GetStreamInfo retrieves information about the NATS stream
+// GetStreamInfo retrieves information about the NATS stream.
 func (nc *NATSClient) GetStreamInfo(ctx context.Context) (*jetstream.StreamInfo, error) {
 	stream, err := nc.js.Stream(ctx, nc.stream)
 	if err != nil {
@@ -115,7 +121,7 @@ func (nc *NATSClient) GetStreamInfo(ctx context.Context) (*jetstream.StreamInfo,
 	return stream.Info(ctx)
 }
 
-// PurgeStream purges all messages from the NATS stream
+// PurgeStream purges all messages from the NATS stream.
 func (nc *NATSClient) PurgeStream(ctx context.Context) error {
 	stream, err := nc.js.Stream(ctx, nc.stream)
 	if err != nil {
@@ -124,24 +130,24 @@ func (nc *NATSClient) PurgeStream(ctx context.Context) error {
 	return stream.Purge(ctx)
 }
 
-// DeleteStream deletes the NATS stream
+// DeleteStream deletes the NATS stream.
 func (nc *NATSClient) DeleteStream(ctx context.Context) error {
 	return nc.js.DeleteStream(ctx, nc.stream)
 }
 
-// SaveState saves the current replication state to NATS
-func (nc *NATSClient) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
+// SaveState saves the current replication state to NATS.
+func (nc *NATSClient) SaveState(ctx context.Context, state State) error {
 	kv, err := nc.js.KeyValue(ctx, nc.stateBucket)
 	if err != nil {
 		return fmt.Errorf("failed to get KV bucket: %v", err)
 	}
 
-	data, err := json.Marshal(lsn)
+	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %v", err)
 	}
 
-	_, err = kv.Put(ctx, "lsn", data)
+	_, err = kv.Put(ctx, "state", data)
 	if err != nil {
 		return fmt.Errorf("failed to save state: %v", err)
 	}
@@ -149,30 +155,34 @@ func (nc *NATSClient) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
 	return nil
 }
 
-// GetLastState retrieves the last saved replication state from NATS
-func (nc *NATSClient) GetLastState(ctx context.Context) (pglogrepl.LSN, error) {
+// GetState retrieves the last saved state from NATS, initializing a new state if none is found.
+func (nc *NATSClient) GetState(ctx context.Context) (State, error) {
 	kv, err := nc.js.KeyValue(ctx, nc.stateBucket)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get KV bucket: %v", err)
+		return State{}, fmt.Errorf("failed to get KV bucket: %v", err)
 	}
 
-	entry, err := kv.Get(ctx, "lsn")
+	entry, err := kv.Get(ctx, "state")
 	if err != nil {
 		if err == jetstream.ErrKeyNotFound {
-			return 0, nil // No state yet, start from the beginning
+			initialState := State{LastProcessedSeq: 0}
+			if err := nc.SaveState(ctx, initialState); err != nil {
+				return State{}, fmt.Errorf("failed to save initial state: %v", err)
+			}
+			return initialState, nil
 		}
-		return 0, fmt.Errorf("failed to get last state: %v", err)
+		return State{}, fmt.Errorf("failed to get state: %v", err)
 	}
 
-	var lsn pglogrepl.LSN
-	if err := json.Unmarshal(entry.Value(), &lsn); err != nil {
-		return 0, fmt.Errorf("failed to unmarshal state: %v", err)
+	var state State
+	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+		return State{}, fmt.Errorf("failed to unmarshal state: %v", err)
 	}
 
-	return lsn, nil
+	return state, nil
 }
 
-// JetStream returns the JetStream context
+// JetStream returns the JetStream context.
 func (nc *NATSClient) JetStream() jetstream.JetStream {
 	return nc.js
 }

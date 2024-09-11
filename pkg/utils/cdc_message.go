@@ -24,7 +24,6 @@ func init() {
 	gob.Register(CDCMessage{})
 	gob.Register(pglogrepl.TupleData{})
 	gob.Register(pglogrepl.TupleDataColumn{})
-	gob.Register(time.Time{})
 }
 
 // CDCMessage represents a full message for Change Data Capture
@@ -37,7 +36,7 @@ type CDCMessage struct {
 	OldTuple         *pglogrepl.TupleData
 	PrimaryKeyColumn string
 	LSN              pglogrepl.LSN
-	CommitTimestamp  time.Time
+	EmittedAt        time.Time
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface
@@ -136,7 +135,7 @@ func EncodeCDCMessage(m CDCMessage) ([]byte, error) {
 	if err := enc.Encode(m.LSN); err != nil {
 		return nil, err
 	}
-	if err := enc.Encode(m.CommitTimestamp); err != nil {
+	if err := enc.Encode(m.EmittedAt); err != nil {
 		return nil, err
 	}
 
@@ -190,7 +189,7 @@ func DecodeCDCMessage(data []byte) (*CDCMessage, error) {
 	if err := dec.Decode(&m.LSN); err != nil {
 		return nil, err
 	}
-	if err := dec.Decode(&m.CommitTimestamp); err != nil {
+	if err := dec.Decode(&m.EmittedAt); err != nil {
 		return nil, err
 	}
 
@@ -302,7 +301,7 @@ func DecodeArray(data []byte, dataType uint32) (interface{}, error) {
 
 // EncodeValue encodes a Go value into a byte slice based on the PostgreSQL data type
 func EncodeValue(value interface{}, dataType uint32) ([]byte, error) {
-	return ConvertToPgOutput(value, dataType)
+	return ConvertToPgCompatibleOutput(value, dataType)
 }
 
 // GetDecodedColumnValue returns the decoded value of a column
@@ -333,7 +332,7 @@ func (m *CDCMessage) GetDecodedMessage() (map[string]interface{}, error) {
 	decodedMessage["Table"] = m.Table
 	decodedMessage["PrimaryKeyColumn"] = m.PrimaryKeyColumn
 	decodedMessage["LSN"] = m.LSN
-	decodedMessage["CommitTimestamp"] = m.CommitTimestamp
+	decodedMessage["EmittedAt"] = m.EmittedAt
 
 	if m.NewTuple != nil {
 		newTuple := make(map[string]interface{})

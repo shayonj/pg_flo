@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog"
+	"github.com/shayonj/pg_flo/pkg/pgflonats"
 	"github.com/shayonj/pg_flo/pkg/replicator"
 	"github.com/shayonj/pg_flo/pkg/utils"
 	"github.com/stretchr/testify/assert"
@@ -189,15 +190,6 @@ func TestBaseReplicator(t *testing.T) {
 			mockStandardConn := new(MockStandardConnection)
 			mockNATSClient := new(MockNATSClient)
 
-			// Mock CreatePublication
-			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
-				Return(MockRow{
-					scanFunc: func(dest ...interface{}) error {
-						*dest[0].(*bool) = true // Publication already exists
-						return nil
-					},
-				})
-
 			mockReplicationConn.On("StartReplication", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			keepaliveMsg := &pgproto3.CopyData{
@@ -250,14 +242,6 @@ func TestBaseReplicator(t *testing.T) {
 		t.Run("Error occurs while starting replication", func(t *testing.T) {
 			mockReplicationConn := new(MockReplicationConnection)
 			mockStandardConn := new(MockStandardConnection)
-
-			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
-				Return(MockRow{
-					scanFunc: func(dest ...interface{}) error {
-						*dest[0].(*bool) = true
-						return nil
-					},
-				})
 
 			mockReplicationConn.On("StartReplication", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("start replication error"))
 
@@ -871,7 +855,9 @@ func TestBaseReplicator(t *testing.T) {
 				CommitLSN:  12345,
 			}
 
-			mockNATSClient.On("SaveState", mock.Anything, pglogrepl.LSN(12345)).Return(nil)
+			mockNATSClient.On("GetState", mock.Anything).Return(pgflonats.State{}, nil)
+
+			mockNATSClient.On("SaveState", mock.Anything, pgflonats.State{LSN: pglogrepl.LSN(12345)}).Return(nil)
 
 			ctx := context.Background()
 			err := br.HandleCommitMessage(ctx, msg)
