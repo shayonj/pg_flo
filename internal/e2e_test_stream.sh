@@ -46,14 +46,17 @@ simulate_changes() {
   local update_count=500
   local delete_count=250
 
+  log "Simulating inserts..."
   for i in $(seq 1 $insert_count); do
     run_sql "INSERT INTO public.users (data) VALUES ('Data $i');"
   done
 
+  log "Simulating updates..."
   for i in $(seq 1 $update_count); do
     run_sql "UPDATE public.users SET data = 'Updated data $i' WHERE id = $i;"
   done
 
+  log "Simulating deletes..."
   for i in $(seq 1 $delete_count); do
     run_sql "DELETE FROM public.users WHERE id = $i;"
   done

@@ -30,7 +30,7 @@ trap cleanup EXIT
 
 make build
 
-# setup_docker
+setup_docker
 
 log "Running e2e copy & stream tests..."
 if CI=false ./internal/e2e_copy_and_stream.sh; then
