@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v5"
@@ -55,7 +56,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 			return strings.Contains(query, "SELECT relpages")
 		}), mock.Anything).Return(MockRow{
 			scanFunc: func(dest ...interface{}) error {
-				*dest[0].(*uint32) = 1 // Mock 1 page for simplicity
+				*dest[0].(*uint32) = 1
 				return nil
 			},
 		})
@@ -69,14 +70,6 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				return nil
 			},
 		})
-
-		mockStandardConn.On("Exec",
-			mock.Anything,
-			mock.MatchedBy(func(query string) bool {
-				return strings.HasPrefix(query, "ANALYZE")
-			}),
-			mock.Anything,
-		).Return(pgconn.CommandTag{}, nil)
 
 		mockTx.On("Commit", mock.Anything).Return(nil)
 
@@ -307,10 +300,10 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					time.Date(2023, time.May, 1, 12, 34, 56, 789000000, time.UTC),
 				},
 				expected: []map[string]interface{}{
-					{"name": "data", "type": "jsonb", "value": `{"key": "value"}`},
+					{"name": "data", "type": "jsonb", "value": json.RawMessage(`{"key": "value"}`)},
 					{"name": "tags", "type": "text[]", "value": "{tag1,tag2,tag3}"},
 					{"name": "image", "type": "bytea", "value": `\x01020304`},
-					{"name": "created_at", "type": "timestamptz", "value": time.Time(time.Date(2023, time.May, 1, 12, 34, 56, 789000000, time.UTC))},
+					{"name": "created_at", "type": "timestamptz", "value": time.Date(2023, time.May, 1, 12, 34, 56, 789000000, time.UTC)},
 				},
 			},
 			{
@@ -392,13 +385,15 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 						case "text", "varchar":
 							assert.Equal(t, expectedVal, string(actualColumn.Data))
 						case "jsonb":
-							assert.JSONEq(t, expectedVal.(string), string(actualColumn.Data))
+							assert.JSONEq(t, string(expectedVal.(json.RawMessage)), string(actualColumn.Data))
+						case "text[]":
+							assert.Equal(t, expectedVal, string(actualColumn.Data))
 						case "bytea":
 							assert.Equal(t, expectedVal, string(actualColumn.Data))
 						case "timestamptz":
 							actualTime, err := time.Parse(time.RFC3339Nano, string(actualColumn.Data))
 							assert.NoError(t, err)
-							assert.Equal(t, expectedVal, actualTime)
+							assert.Equal(t, expectedVal.(time.Time), actualTime)
 						case "numeric":
 							assert.Equal(t, expectedVal, string(actualColumn.Data))
 						default:

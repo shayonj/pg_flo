@@ -195,15 +195,16 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 		}
 
 		cdcMessage := utils.CDCMessage{
-			Type:            "DDL",
-			Schema:          schema,
-			Table:           table,
-			CommitTimestamp: createdAt,
+			Type:      "DDL",
+			Schema:    schema,
+			Table:     table,
+			EmittedAt: time.Now(),
 			Columns: []*pglogrepl.RelationMessageColumn{
 				{Name: "event_type", DataType: pgtype.TextOID},
 				{Name: "object_type", DataType: pgtype.TextOID},
 				{Name: "object_identity", DataType: pgtype.TextOID},
 				{Name: "ddl_command", DataType: pgtype.TextOID},
+				{Name: "created_at", DataType: pgtype.TimestamptzOID},
 			},
 			NewTuple: &pglogrepl.TupleData{
 				Columns: []*pglogrepl.TupleDataColumn{
@@ -211,6 +212,7 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 					{Data: []byte(objectType)},
 					{Data: []byte(objectIdentity)},
 					{Data: []byte(ddlCommand)},
+					{Data: []byte(createdAt.Format(time.RFC3339))},
 				},
 			},
 		}

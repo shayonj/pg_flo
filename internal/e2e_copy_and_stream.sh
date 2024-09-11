@@ -37,6 +37,7 @@ populate_initial_data() {
     decode(lpad(to_hex(generate_series(1, 4)), 8, '0'), 'hex')
   ;"
   run_sql "UPDATE public.users SET text_col = text_col || ' - Updated';"
+  run_sql "ANALYZE public.users;"
   success "Initial data populated"
 }
 
@@ -121,7 +122,7 @@ test_pg_flo_cdc() {
   simulate_concurrent_changes
 
   log "Waiting for pg_flo to process changes..."
-  sleep 30
+  sleep 2
 
   stop_pg_flo_gracefully
 

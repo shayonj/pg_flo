@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/shayonj/pg_flo/pkg/pgflonats"
 	"github.com/shayonj/pg_flo/pkg/replicator"
 	"github.com/stretchr/testify/mock"
 )
@@ -267,34 +268,16 @@ func (m *MockNATSClient) Close() error {
 	return args.Error(0)
 }
 
-// GetStreamInfo mocks the GetStreamInfo method
-func (m *MockNATSClient) GetStreamInfo(ctx context.Context) (*jetstream.StreamInfo, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(*jetstream.StreamInfo), args.Error(1)
-}
-
-// PurgeStream mocks the PurgeStream method
-func (m *MockNATSClient) PurgeStream(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
-}
-
-// DeleteStream mocks the DeleteStream method
-func (m *MockNATSClient) DeleteStream(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
-}
-
 // SaveState mocks the SaveState method
-func (m *MockNATSClient) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
-	args := m.Called(ctx, lsn)
+func (m *MockNATSClient) SaveState(ctx context.Context, state pgflonats.State) error {
+	args := m.Called(ctx, state)
 	return args.Error(0)
 }
 
-// GetLastState mocks the GetLastState method
-func (m *MockNATSClient) GetLastState(ctx context.Context) (pglogrepl.LSN, error) {
+// GetState mocks the GetState method
+func (m *MockNATSClient) GetState(ctx context.Context) (pgflonats.State, error) {
 	args := m.Called(ctx)
-	return args.Get(0).(pglogrepl.LSN), args.Error(1)
+	return args.Get(0).(pgflonats.State), args.Error(1)
 }
 
 // JetStream mocks the JetStream method

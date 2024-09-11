@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/shayonj/pg_flo/pkg/pgflonats"
 )
 
 type Replicator interface {
@@ -44,10 +45,7 @@ type PgxPoolConn interface {
 type NATSClient interface {
 	PublishMessage(ctx context.Context, subject string, data []byte) error
 	Close() error
-	GetStreamInfo(ctx context.Context) (*jetstream.StreamInfo, error)
-	PurgeStream(ctx context.Context) error
-	DeleteStream(ctx context.Context) error
-	SaveState(ctx context.Context, lsn pglogrepl.LSN) error
-	GetLastState(ctx context.Context) (pglogrepl.LSN, error)
+	SaveState(ctx context.Context, state pgflonats.State) error
+	GetState(ctx context.Context) (pgflonats.State, error)
 	JetStream() jetstream.JetStream
 }

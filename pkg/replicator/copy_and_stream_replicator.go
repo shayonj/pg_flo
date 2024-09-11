@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
@@ -35,6 +36,10 @@ func (r *CopyAndStreamReplicator) StartReplication() error {
 
 	go r.handleShutdownSignal(sigChan, cancel)
 
+	if err := r.BaseReplicator.CreatePublication(); err != nil {
+		return fmt.Errorf("failed to create publication: %v", err)
+	}
+
 	if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
 		return fmt.Errorf("failed to create replication slot: %v", err)
 	}
@@ -58,10 +63,10 @@ func (r *CopyAndStreamReplicator) StartReplication() error {
 		}
 	}()
 
-	startLSN, err := r.getStartLSN()
-	if err != nil {
-		return err
+	if copyErr := r.ParallelCopy(context.Background()); copyErr != nil {
+		return fmt.Errorf("failed to perform parallel copy: %v", copyErr)
 	}
+	startLSN := r.BaseReplicator.LastLSN
 
 	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Starting replication from LSN")
 	return r.BaseReplicator.StartReplicationFromLSN(ctx, startLSN)
@@ -74,24 +79,8 @@ func (r *CopyAndStreamReplicator) handleShutdownSignal(sigChan <-chan os.Signal,
 	cancel()
 }
 
-// getStartLSN determines the starting LSN for replication.
-func (r *CopyAndStreamReplicator) getStartLSN() (pglogrepl.LSN, error) {
-	r.Logger.Info().Msg("No valid LSN found in sink, starting initial copy")
-	if copyErr := r.ParallelCopy(context.Background()); copyErr != nil {
-		return 0, fmt.Errorf("failed to perform parallel copy: %v", copyErr)
-	}
-	return r.BaseReplicator.LastLSN, nil
-}
-
 // ParallelCopy performs a parallel copy of all specified tables.
 func (r *CopyAndStreamReplicator) ParallelCopy(ctx context.Context) error {
-
-	for _, table := range r.Config.Tables {
-		if err := r.analyzeTable(ctx, table); err != nil {
-			return fmt.Errorf("failed to analyze table %s: %v", table, err)
-		}
-	}
-
 	tx, err := r.startSnapshotTransaction(ctx)
 	if err != nil {
 		return err
@@ -111,13 +100,6 @@ func (r *CopyAndStreamReplicator) ParallelCopy(ctx context.Context) error {
 	}
 
 	return tx.Commit(context.Background())
-}
-
-// analyzeTable runs ANALYZE on the specified table.
-func (r *CopyAndStreamReplicator) analyzeTable(ctx context.Context, tableName string) error {
-	r.Logger.Info().Str("table", tableName).Msg("Running ANALYZE on table")
-	_, err := r.BaseReplicator.StandardConn.Exec(ctx, fmt.Sprintf("ANALYZE %s", pgx.Identifier{tableName}.Sanitize()))
-	return err
 }
 
 // startSnapshotTransaction starts a new transaction with serializable isolation level.
@@ -334,7 +316,7 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 			Columns: make([]*pglogrepl.TupleDataColumn, len(values)),
 		}
 		for i, value := range values {
-			data, err := utils.ConvertToPgOutput(value, fieldDescriptions[i].DataTypeOID)
+			data, err := utils.ConvertToPgCompatibleOutput(value, fieldDescriptions[i].DataTypeOID)
 			if err != nil {
 				return 0, fmt.Errorf("error converting value: %v", err)
 			}
@@ -346,11 +328,12 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 		}
 
 		cdcMessage := utils.CDCMessage{
-			Type:     "INSERT",
-			Schema:   schema,
-			Table:    tableName,
-			Columns:  columns,
-			NewTuple: tupleData,
+			Type:      "INSERT",
+			Schema:    schema,
+			Table:     tableName,
+			Columns:   columns,
+			NewTuple:  tupleData,
+			EmittedAt: time.Now(),
 		}
 
 		r.BaseReplicator.AddPrimaryKeyInfo(&cdcMessage, tableName)
