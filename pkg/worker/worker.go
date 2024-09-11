@@ -3,6 +3,9 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/rs/zerolog"
@@ -14,13 +17,18 @@ import (
 
 // Worker represents a worker that processes messages from NATS.
 type Worker struct {
-	natsClient *pgflonats.NATSClient
-	ruleEngine *rules.RuleEngine
-	sink       sinks.Sink
-	group      string
-	logger     zerolog.Logger
-	batchSize  int
-	maxRetries int
+	natsClient     *pgflonats.NATSClient
+	ruleEngine     *rules.RuleEngine
+	sink           sinks.Sink
+	group          string
+	logger         zerolog.Logger
+	batchSize      int
+	buffer         []*utils.CDCMessage
+	lastSavedState uint64
+	flushInterval  time.Duration
+	shutdownCh     chan struct{}
+	wg             sync.WaitGroup
+	isShuttingDown atomic.Bool
 }
 
 // NewWorker creates and returns a new Worker instance with the provided NATS client, rule engine, sink, and group.
@@ -28,13 +36,16 @@ func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, s
 	logger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Str("component", "worker").Logger()
 
 	return &Worker{
-		natsClient: natsClient,
-		ruleEngine: ruleEngine,
-		sink:       sink,
-		group:      group,
-		logger:     logger,
-		batchSize:  100,
-		maxRetries: 3,
+		natsClient:     natsClient,
+		ruleEngine:     ruleEngine,
+		sink:           sink,
+		group:          group,
+		logger:         logger,
+		batchSize:      1000,
+		buffer:         make([]*utils.CDCMessage, 0, 1000),
+		lastSavedState: 0,
+		flushInterval:  5 * time.Second,
+		shutdownCh:     make(chan struct{}),
 	}
 }
 
@@ -95,7 +106,32 @@ func (w *Worker) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create ordered consumer: %w", err)
 	}
 
-	return w.processMessages(ctx, cons)
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		if err := w.processMessages(ctx, cons); err != nil && err != context.Canceled {
+			w.logger.Error().Err(err).Msg("Error processing messages")
+		}
+	}()
+
+	<-ctx.Done()
+	w.logger.Info().Msg("Received shutdown signal. Initiating graceful shutdown...")
+	w.isShuttingDown.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		w.logger.Debug().Msg("All goroutines finished")
+	case <-time.After(30 * time.Second):
+		w.logger.Warn().Msg("Shutdown timed out, forcing exit")
+	}
+
+	return w.flushBuffer()
 }
 
 // processMessages continuously processes messages from the NATS consumer.
@@ -106,22 +142,42 @@ func (w *Worker) processMessages(ctx context.Context, cons jetstream.Consumer) e
 	}
 	defer iter.Stop()
 
+	flushTicker := time.NewTicker(w.flushInterval)
+	defer flushTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			w.logger.Info().Msg("Context canceled, flushing remaining messages")
+			return w.flushBuffer()
+		case <-flushTicker.C:
+			if err := w.flushBuffer(); err != nil {
+				w.logger.Error().Err(err).Msg("Failed to flush buffer on interval")
+			}
 		default:
+			if w.isShuttingDown.Load() {
+				w.logger.Info().Msg("Shutdown in progress, stopping message processing")
+				return w.flushBuffer()
+			}
+
 			msg, err := iter.Next()
 			if err != nil {
+				if err == context.Canceled {
+					return w.flushBuffer()
+				}
 				w.logger.Error().Err(err).Msg("Failed to get next message")
 				continue
 			}
 
 			if err := w.processMessage(msg); err != nil {
 				w.logger.Error().Err(err).Msg("Failed to process message")
-				// Note: OrderedConsumer doesn't support Nak()
 			}
-			// Note: OrderedConsumer doesn't require explicit Ack()
+
+			if len(w.buffer) >= w.batchSize {
+				if err := w.flushBuffer(); err != nil {
+					w.logger.Error().Err(err).Msg("Failed to flush buffer")
+				}
+			}
 		}
 	}
 }
@@ -133,11 +189,6 @@ func (w *Worker) processMessage(msg jetstream.Msg) error {
 		w.logger.Error().Err(err).Msg("Failed to get message metadata")
 		return err
 	}
-
-	w.logger.Debug().
-		Uint64("stream_seq", metadata.Sequence.Stream).
-		Uint64("consumer_seq", metadata.Sequence.Consumer).
-		Msg("Processing message")
 
 	var cdcMessage utils.CDCMessage
 	err = cdcMessage.UnmarshalBinary(msg.Data())
@@ -159,9 +210,22 @@ func (w *Worker) processMessage(msg jetstream.Msg) error {
 		cdcMessage = *processedMessage
 	}
 
-	err = w.sink.WriteBatch([]*utils.CDCMessage{&cdcMessage})
+	w.buffer = append(w.buffer, &cdcMessage)
+	w.lastSavedState = metadata.Sequence.Stream
+
+	return nil
+}
+
+func (w *Worker) flushBuffer() error {
+	if len(w.buffer) == 0 {
+		return nil
+	}
+
+	w.logger.Debug().Int("messages", len(w.buffer)).Msg("Flushing buffer")
+
+	err := w.sink.WriteBatch(w.buffer)
 	if err != nil {
-		w.logger.Error().Err(err).Msg("Failed to write to sink")
+		w.logger.Error().Err(err).Msg("Failed to write batch to sink")
 		return err
 	}
 
@@ -171,14 +235,12 @@ func (w *Worker) processMessage(msg jetstream.Msg) error {
 		return err
 	}
 
-	if metadata.Sequence.Stream > state.LastProcessedSeq {
-		state.LastProcessedSeq = metadata.Sequence.Stream
-		if err := w.natsClient.SaveState(context.Background(), state); err != nil {
-			w.logger.Error().Err(err).Msg("Failed to save state")
-		} else {
-			w.logger.Debug().Uint64("last_processed_seq", state.LastProcessedSeq).Msg("Updated last processed sequence")
-		}
+	state.LastProcessedSeq = w.lastSavedState
+	if err := w.natsClient.SaveState(context.Background(), state); err != nil {
+		w.logger.Error().Err(err).Msg("Failed to save state")
+		return err
 	}
 
+	w.buffer = w.buffer[:0]
 	return nil
 }

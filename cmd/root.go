@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/pgflonats"
@@ -106,6 +109,7 @@ func init() {
 	postgresWorkerCmd.Flags().String("postgres-user", "", "Target PostgreSQL user (env: PG_FLO_POSTGRES_USER)")
 	postgresWorkerCmd.Flags().String("postgres-password", "", "Target PostgreSQL password (env: PG_FLO_POSTGRES_PASSWORD)")
 	postgresWorkerCmd.Flags().Bool("postgres-sync-schema", false, "Sync schema from source to target (env: PG_FLO_POSTGRES_SYNC_SCHEMA)")
+	postgresWorkerCmd.Flags().Bool("postgres-disable-foreign-keys", false, "Disable foreign key checks during write (env: PG_FLO_POSTGRES_DISABLE_FOREIGN_KEYS)")
 
 	markFlagRequired(postgresWorkerCmd, "postgres-host", "postgres-dbname", "postgres-user", "postgres-password")
 
@@ -228,9 +232,30 @@ func runWorker(cmd *cobra.Command, _ []string) {
 	}
 
 	w := worker.NewWorker(natsClient, ruleEngine, sink, group)
-	if err := w.Start(cmd.Context()); err != nil {
-		log.Fatal().Err(err).Msg("Worker failed")
+
+	ctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
+
+	// Set up signal handling
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		log.Info().Msgf("Received shutdown signal: %v. Canceling context...", sig)
+		cancel()
+	}()
+
+	log.Info().Msg("Starting worker...")
+	if err := w.Start(ctx); err != nil {
+		if err == context.Canceled {
+			log.Info().Msg("Worker shut down gracefully")
+		} else {
+			log.Error().Err(err).Msg("Worker encountered an error during shutdown")
+		}
 	}
+
+	log.Info().Msg("Worker process exiting")
 }
 
 func loadRulesConfig(filePath string) (rules.Config, error) {
@@ -267,6 +292,7 @@ func createSink(sinkType string) (sinks.Sink, error) {
 			viper.GetString("dbname"),
 			viper.GetString("user"),
 			viper.GetString("password"),
+			viper.GetBool("postgres-disable-foreign-keys"),
 		)
 	case "webhook":
 		return sinks.NewWebhookSink(

@@ -190,7 +190,7 @@ func (r *CopyAndStreamReplicator) getRelPages(ctx context.Context, tableName str
 // generateRanges creates a set of page ranges for copying.
 func (r *CopyAndStreamReplicator) generateRanges(relPages uint32) [][2]uint32 {
 	var ranges [][2]uint32
-	batchSize := uint32(100)
+	batchSize := uint32(1000)
 	for start := uint32(0); start < relPages; start += batchSize {
 		end := start + batchSize
 		if end >= relPages {

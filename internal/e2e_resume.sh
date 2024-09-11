@@ -17,6 +17,10 @@ create_users() {
 
 start_pg_flo_replication() {
   log "Starting pg_flo replication..."
+  if [ -f "$pg_flo_LOG" ]; then
+    mv "$pg_flo_LOG" "${pg_flo_LOG}.bak"
+    log "Backed up previous replicator log to ${pg_flo_LOG}.bak"
+  fi
   $pg_flo_BIN replicator \
     --host "$PG_HOST" \
     --port "$PG_PORT" \
@@ -35,6 +39,10 @@ start_pg_flo_replication() {
 
 start_pg_flo_worker() {
   log "Starting pg_flo worker with file sink..."
+  if [ -f "$pg_flo_WORKER_LOG" ]; then
+    mv "$pg_flo_WORKER_LOG" "${pg_flo_WORKER_LOG}.bak"
+    log "Backed up previous worker log to ${pg_flo_WORKER_LOG}.bak"
+  fi
   $pg_flo_BIN worker file \
     --group "group_resume" \
     --nats-url "$NATS_URL" \
@@ -72,6 +80,7 @@ verify_results() {
     return 0
   else
     error "Mismatch in insert counts. Expected $TOTAL_INSERTS, DB: $db_count, JSON: $json_count"
+    cat "$OUTPUT_DIR"/*
     return 1
   fi
 }
@@ -84,7 +93,7 @@ test_pg_flo_resume() {
 
   rm -f $INSERT_COMPLETE_FLAG
 
-  sleep 1
+  sleep 2
 
   simulate_concurrent_inserts &
   local insert_pid=$!

@@ -14,11 +14,12 @@ import (
 
 // PostgresSink represents a sink for PostgreSQL database
 type PostgresSink struct {
-	conn *pgx.Conn
+	conn                    *pgx.Conn
+	disableForeignKeyChecks bool
 }
 
 // NewPostgresSink creates a new PostgresSink instance
-func NewPostgresSink(targetHost string, targetPort int, targetDBName, targetUser, targetPassword string, syncSchema bool, sourceHost string, sourcePort int, sourceDBName, sourceUser, sourcePassword string) (*PostgresSink, error) {
+func NewPostgresSink(targetHost string, targetPort int, targetDBName, targetUser, targetPassword string, syncSchema bool, sourceHost string, sourcePort int, sourceDBName, sourceUser, sourcePassword string, disableForeignKeyChecks bool) (*PostgresSink, error) {
 	connConfig, err := pgx.ParseConfig(fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s", targetHost, targetPort, targetDBName, targetUser, targetPassword))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse connection config: %v", err)
@@ -30,7 +31,8 @@ func NewPostgresSink(targetHost string, targetPort int, targetDBName, targetUser
 	}
 
 	sink := &PostgresSink{
-		conn: conn,
+		conn:                    conn,
+		disableForeignKeyChecks: disableForeignKeyChecks,
 	}
 
 	if syncSchema {
@@ -162,17 +164,41 @@ func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) error {
 	return err
 }
 
+// disableForeignKeys disables foreign key checks
+func (s *PostgresSink) disableForeignKeys(ctx context.Context) error {
+	_, err := s.conn.Exec(ctx, "SET session_replication_role = 'replica';")
+	return err
+}
+
+// enableForeignKeys enables foreign key checks
+func (s *PostgresSink) enableForeignKeys(ctx context.Context) error {
+	_, err := s.conn.Exec(ctx, "SET session_replication_role = 'origin';")
+	return err
+}
+
 // WriteBatch writes a batch of CDC messages to the target database
 func (s *PostgresSink) WriteBatch(messages []*utils.CDCMessage) error {
-	tx, err := s.conn.Begin(context.Background())
+	ctx := context.Background()
+	tx, err := s.conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %v", err)
 	}
 	defer func() {
-		if err := tx.Rollback(context.Background()); err != nil && err != pgx.ErrTxClosed {
+		if err := tx.Rollback(ctx); err != nil && err != pgx.ErrTxClosed {
 			log.Error().Err(err).Msg("failed to rollback transaction")
 		}
 	}()
+
+	if s.disableForeignKeyChecks {
+		if err := s.disableForeignKeys(ctx); err != nil {
+			return fmt.Errorf("failed to disable foreign key checks: %v", err)
+		}
+		defer func() {
+			if err := s.enableForeignKeys(ctx); err != nil {
+				log.Error().Err(err).Msg("failed to re-enable foreign key checks")
+			}
+		}()
+	}
 
 	for _, message := range messages {
 		var err error
@@ -194,7 +220,7 @@ func (s *PostgresSink) WriteBatch(messages []*utils.CDCMessage) error {
 		}
 	}
 
-	if err := tx.Commit(context.Background()); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
 

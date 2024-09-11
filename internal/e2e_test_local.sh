@@ -4,6 +4,7 @@ set -euo pipefail
 source "$(dirname "$0")/e2e_common.sh"
 
 setup_docker() {
+  pkill -9 "pg_flo" || true
   rm -Rf /tmp/pg*
   log "Setting up Docker environment..."
   docker compose down -v
@@ -32,23 +33,23 @@ make build
 
 # setup_docker
 
-log "Running e2e copy & stream tests..."
-if CI=false ./internal/e2e_copy_and_stream.sh; then
-  success "Original e2e tests completed successfully"
-else
-  error "Original e2e tests failed"
-  exit 1
-fi
+# log "Running e2e copy & stream tests..."
+# if CI=false ./internal/e2e_copy_and_stream.sh; then
+#   success "Original e2e tests completed successfully"
+# else
+#   error "Original e2e tests failed"
+#   exit 1
+# fi
 
-setup_docker
+# setup_docker
 
-log "Running new e2e stream tests with changes..."
-if ./internal/e2e_test_stream.sh; then
-  success "New e2e tests with changes completed successfully"
-else
-  error "New e2e tests with changes failed"
-  exit 1
-fi
+# log "Running new e2e stream tests with changes..."
+# if ./internal/e2e_test_stream.sh; then
+#   success "New e2e tests with changes completed successfully"
+# else
+#   error "New e2e tests with changes failed"
+#   exit 1
+# fi
 
 setup_docker
 

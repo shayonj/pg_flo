@@ -64,11 +64,11 @@ stop_pg_flo_gracefully() {
 show_pg_flo_logs() {
   log "pg_flo replicator logs:"
   echo "----------------------------------------"
-  cat $pg_flo_LOG
+  cat $pg_flo_LOG*
   echo "----------------------------------------"
 
   log "pg_flo worker logs:"
   echo "----------------------------------------"
-  cat $pg_flo_WORKER_LOG
+  cat $pg_flo_WORKER_LOG*
   echo "----------------------------------------"
 }
