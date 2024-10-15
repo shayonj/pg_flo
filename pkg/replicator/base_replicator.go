@@ -123,9 +123,10 @@ func (r *BaseReplicator) checkPublicationExists(publicationName string) (bool, e
 }
 
 // StartReplicationFromLSN initiates the replication process from a given LSN
-func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN pglogrepl.LSN) error {
+func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN pglogrepl.LSN, stopChan <-chan struct{}) error {
 	publicationName := GeneratePublicationName(r.Config.Group)
 	r.Logger.Info().Str("startLSN", startLSN.String()).Str("publication", publicationName).Msg("Starting replication")
+
 	err := r.ReplicationConn.StartReplication(ctx, publicationName, startLSN, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{
 			"proto_version '1'",
@@ -138,30 +139,21 @@ func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN p
 
 	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Replication started successfully")
 
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- r.StreamChanges(ctx)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return r.gracefulShutdown()
-	case err := <-errChan:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-		return nil
-	}
+	return r.StreamChanges(ctx, stopChan)
 }
 
 // StreamChanges continuously processes replication messages
-func (r *BaseReplicator) StreamChanges(ctx context.Context) error {
+func (r *BaseReplicator) StreamChanges(ctx context.Context, stopChan <-chan struct{}) error {
 	lastStatusUpdate := time.Now()
 	standbyMessageTimeout := time.Second * 10
 
 	for {
 		select {
 		case <-ctx.Done():
+			r.Logger.Info().Msg("Stopping StreamChanges")
+			return nil
+		case <-stopChan:
+			r.Logger.Info().Msg("Stop signal received, exiting StreamChanges")
 			return nil
 		default:
 			if err := r.ProcessNextMessage(ctx, &lastStatusUpdate, standbyMessageTimeout); err != nil {
@@ -178,10 +170,12 @@ func (r *BaseReplicator) StreamChanges(ctx context.Context) error {
 func (r *BaseReplicator) ProcessNextMessage(ctx context.Context, lastStatusUpdate *time.Time, standbyMessageTimeout time.Duration) error {
 	msg, err := r.ReplicationConn.ReceiveMessage(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("context error while receiving message: %w", ctx.Err())
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			r.Logger.Info().Msg("Context canceled or deadline exceeded, stopping message processing")
+			return nil
 		}
-		return fmt.Errorf("failed to receive message: %w", err)
+		r.Logger.Error().Err(err).Msg("Error processing next message")
+		return err
 	}
 
 	switch msg := msg.(type) {
@@ -414,19 +408,6 @@ func (r *BaseReplicator) SendStandbyStatusUpdate(ctx context.Context) error {
 	return nil
 }
 
-// SendFinalStandbyStatusUpdate sends a final status update before shutting down
-func (r *BaseReplicator) SendFinalStandbyStatusUpdate() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := r.SendStandbyStatusUpdate(ctx); err != nil {
-		return fmt.Errorf("failed to send standby status update: %w", err)
-	}
-
-	r.Logger.Info().Msg("Sent final standby status update")
-	return nil
-}
-
 // CreateReplicationSlot ensures that a replication slot exists, creating one if necessary
 func (r *BaseReplicator) CreateReplicationSlot(ctx context.Context) error {
 	publicationName := GeneratePublicationName(r.Config.Group)
@@ -463,28 +444,34 @@ func (r *BaseReplicator) CheckReplicationSlotExists(slotName string) (bool, erro
 	return exists, nil
 }
 
-// gracefulShutdown performs a graceful shutdown of the replicator
-func (r *BaseReplicator) gracefulShutdown() error {
+// GracefulShutdown performs a graceful shutdown of the replicator
+func (r *BaseReplicator) GracefulShutdown(ctx context.Context) error {
 	r.Logger.Info().Msg("Initiating graceful shutdown")
 
-	if err := r.SendFinalStandbyStatusUpdate(); err != nil {
-		r.Logger.Error().Err(err).Msg("Failed to send final standby status update")
+	if err := r.SendStandbyStatusUpdate(ctx); err != nil {
+		r.Logger.Warn().Err(err).Msg("Failed to send final standby status update")
 	}
 
-	if err := r.closeConnections(); err != nil {
-		r.Logger.Error().Err(err).Msg("Failed to close connections")
+	if err := r.SaveState(ctx, r.LastLSN); err != nil {
+		r.Logger.Warn().Err(err).Msg("Failed to save final state")
 	}
 
-	r.Logger.Info().Msg("Graceful shutdown completed")
+	if err := r.closeConnections(ctx); err != nil {
+		r.Logger.Warn().Err(err).Msg("Failed to close connections")
+	}
+
+	r.Logger.Info().Msg("Base replicator shutdown completed")
 	return nil
 }
 
 // closeConnections closes all open database connections
-func (r *BaseReplicator) closeConnections() error {
-	if err := r.ReplicationConn.Close(context.Background()); err != nil {
+func (r *BaseReplicator) closeConnections(ctx context.Context) error {
+	r.Logger.Info().Msg("Closing database connections")
+
+	if err := r.ReplicationConn.Close(ctx); err != nil {
 		return fmt.Errorf("failed to close replication connection: %w", err)
 	}
-	if err := r.StandardConn.Close(context.Background()); err != nil {
+	if err := r.StandardConn.Close(ctx); err != nil {
 		return fmt.Errorf("failed to close standard connection: %w", err)
 	}
 	return nil

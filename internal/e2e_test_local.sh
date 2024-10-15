@@ -62,16 +62,16 @@ else
   exit 1
 fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e test for transform & filter
-log "Running new e2e test for transform & filter..."
-if ./internal/e2e_transform_filter.sh; then
-  success "E2E test for transform & filter test completed successfully"
-else
-  error "E2E test for transform & filter test failed"
-  exit 1
-fi
+# # Run new e2e test for transform & filter
+# log "Running new e2e test for transform & filter..."
+# if ./internal/e2e_transform_filter.sh; then
+#   success "E2E test for transform & filter test completed successfully"
+# else
+#   error "E2E test for transform & filter test failed"
+#   exit 1
+# fi
 
 # setup_docker
 
@@ -84,15 +84,15 @@ fi
 #   exit 1
 # fi
 
-# setup_docker
+setup_docker
 
-# # Run new e2e test for DDL changes
-# log "Running new e2e test Postgres Sink..."
-# if ./internal/e2e_postgres.sh; then
-#   success "E2E test for Postgres Sink completed successfully"
-# else
-#   error "E2E test for Postgres Sink failed"
-#   exit 1
-# fi
+# Run new e2e test for DDL changes
+log "Running new e2e test Postgres Sink..."
+if ./internal/e2e_postgres.sh; then
+  success "E2E test for Postgres Sink completed successfully"
+else
+  error "E2E test for Postgres Sink failed"
+  exit 1
+fi
 
 # success "All local e2e tests completed successfully"

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -28,7 +27,6 @@ type Worker struct {
 	flushInterval  time.Duration
 	shutdownCh     chan struct{}
 	wg             sync.WaitGroup
-	isShuttingDown atomic.Bool
 }
 
 // NewWorker creates and returns a new Worker instance with the provided NATS client, rule engine, sink, and group.
@@ -44,7 +42,7 @@ func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, s
 		batchSize:      1000,
 		buffer:         make([]*utils.CDCMessage, 0, 1000),
 		lastSavedState: 0,
-		flushInterval:  5 * time.Second,
+		flushInterval:  1 * time.Second,
 		shutdownCh:     make(chan struct{}),
 	}
 }
@@ -116,20 +114,9 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	<-ctx.Done()
 	w.logger.Info().Msg("Received shutdown signal. Initiating graceful shutdown...")
-	w.isShuttingDown.Store(true)
 
-	done := make(chan struct{})
-	go func() {
-		w.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		w.logger.Debug().Msg("All goroutines finished")
-	case <-time.After(30 * time.Second):
-		w.logger.Warn().Msg("Shutdown timed out, forcing exit")
-	}
+	w.wg.Wait()
+	w.logger.Debug().Msg("All goroutines finished")
 
 	return w.flushBuffer()
 }
@@ -140,39 +127,52 @@ func (w *Worker) processMessages(ctx context.Context, cons jetstream.Consumer) e
 	if err != nil {
 		return fmt.Errorf("failed to get message iterator: %w", err)
 	}
-	defer iter.Stop()
 
 	flushTicker := time.NewTicker(w.flushInterval)
 	defer flushTicker.Stop()
 
+	msgCh := make(chan jetstream.Msg)
+	errCh := make(chan error)
+
+	go func() {
+		defer close(msgCh)
+		for {
+			msg, err := iter.Next()
+			if err != nil {
+				if err == jetstream.ErrMsgIteratorClosed {
+					return
+				}
+				errCh <- err
+				return
+			}
+			select {
+			case msgCh <- msg:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
-			w.logger.Info().Msg("Context canceled, flushing remaining messages")
+			w.logger.Info().Msg("Flushing remaining messages")
 			return w.flushBuffer()
 		case <-flushTicker.C:
 			if err := w.flushBuffer(); err != nil {
 				w.logger.Error().Err(err).Msg("Failed to flush buffer on interval")
 			}
-		default:
-			if w.isShuttingDown.Load() {
-				w.logger.Info().Msg("Shutdown in progress, stopping message processing")
+		case err := <-errCh:
+			w.logger.Error().Err(err).Msg("Error receiving message")
+			return err
+		case msg, ok := <-msgCh:
+			if !ok {
+				w.logger.Info().Msg("Message channel closed, flushing buffer")
 				return w.flushBuffer()
 			}
-
-			msg, err := iter.Next()
-			if err != nil {
-				if err == context.Canceled {
-					return w.flushBuffer()
-				}
-				w.logger.Error().Err(err).Msg("Failed to get next message")
-				continue
-			}
-
 			if err := w.processMessage(msg); err != nil {
 				w.logger.Error().Err(err).Msg("Failed to process message")
 			}
-
 			if len(w.buffer) >= w.batchSize {
 				if err := w.flushBuffer(); err != nil {
 					w.logger.Error().Err(err).Msg("Failed to flush buffer")
@@ -216,6 +216,7 @@ func (w *Worker) processMessage(msg jetstream.Msg) error {
 	return nil
 }
 
+// flushBuffer writes the buffered messages to the sink and updates the last processed sequence.
 func (w *Worker) flushBuffer() error {
 	if len(w.buffer) == 0 {
 		return nil

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/jackc/pglogrepl"
@@ -17,44 +18,13 @@ type StreamReplicator struct {
 
 // StartReplication begins the replication process.
 func (r *StreamReplicator) StartReplication() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
 
-	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go r.handleShutdownSignal(sigChan, cancel)
-
-	if err := r.BaseReplicator.CreatePublication(); err != nil {
-		return fmt.Errorf("failed to create publication: %v", err)
-	}
-
-	if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
-		return fmt.Errorf("failed to create replication slot: %v", err)
-	}
-
-	var ddlCancel context.CancelFunc
-	if r.Config.TrackDDL {
-		if err := r.DDLReplicator.SetupDDLTracking(ctx); err != nil {
-			return fmt.Errorf("failed to set up DDL tracking: %v", err)
-		}
-		var ddlCtx context.Context
-		ddlCtx, ddlCancel = context.WithCancel(ctx)
-		go r.DDLReplicator.StartDDLReplication(ddlCtx)
-	}
-
-	defer func() {
-		if r.Config.TrackDDL {
-			ddlCancel()
-			if err := r.DDLReplicator.Shutdown(context.Background()); err != nil {
-				r.Logger.Error().Err(err).Msg("Failed to shutdown DDL replicator")
-			}
-		}
-	}()
-
-	if err := r.BaseReplicator.CheckReplicationSlotStatus(ctx); err != nil {
-		return fmt.Errorf("failed to check replication slot status: %v", err)
+	if err := r.setup(ctx); err != nil {
+		return err
 	}
 
 	startLSN, err := r.getStartLSN(ctx)
@@ -63,14 +33,74 @@ func (r *StreamReplicator) StartReplication() error {
 	}
 
 	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Starting replication from LSN")
-	return r.BaseReplicator.StartReplicationFromLSN(ctx, startLSN)
+
+	// Start DDL replication with its own cancellable context and wait group
+	var ddlWg sync.WaitGroup
+	var ddlCancel context.CancelFunc
+	if r.Config.TrackDDL {
+		ddlCtx, cancel := context.WithCancel(ctx)
+		ddlCancel = cancel
+		if err := r.DDLReplicator.SetupDDLTracking(ctx); err != nil {
+			return fmt.Errorf("failed to set up DDL tracking: %v", err)
+		}
+		ddlWg.Add(1)
+		go func() {
+			defer ddlWg.Done()
+			r.DDLReplicator.StartDDLReplication(ddlCtx)
+		}()
+	}
+
+	stopChan := make(chan struct{})
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- r.BaseReplicator.StartReplicationFromLSN(ctx, startLSN, stopChan)
+	}()
+
+	select {
+	case <-sigChan:
+		r.Logger.Info().Msg("Received shutdown signal")
+		// Signal the replication loop to stop
+		close(stopChan)
+		// Wait for the replication loop to exit
+		<-errChan
+
+		// Signal DDL replication to stop and wait for it to finish
+		if r.Config.TrackDDL {
+			ddlCancel()
+			ddlWg.Wait()
+			if err := r.DDLReplicator.Shutdown(context.Background()); err != nil {
+				r.Logger.Error().Err(err).Msg("Failed to shutdown DDL replicator")
+			}
+		}
+
+		if err := r.BaseReplicator.GracefulShutdown(ctx); err != nil {
+			r.Logger.Error().Err(err).Msg("Error during graceful shutdown")
+			return err
+		}
+	case err := <-errChan:
+		if err != nil {
+			r.Logger.Error().Err(err).Msg("Replication ended with error")
+			return err
+		}
+	}
+
+	return nil
 }
 
-// handleShutdownSignal waits for a shutdown signal and cancels the context.
-func (r *StreamReplicator) handleShutdownSignal(sigChan <-chan os.Signal, cancel context.CancelFunc) {
-	sig := <-sigChan
-	r.Logger.Info().Str("signal", sig.String()).Msg("Received shutdown signal")
-	cancel()
+func (r *StreamReplicator) setup(ctx context.Context) error {
+	if err := r.BaseReplicator.CreatePublication(); err != nil {
+		return fmt.Errorf("failed to create publication: %v", err)
+	}
+
+	if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
+		return fmt.Errorf("failed to create replication slot: %v", err)
+	}
+
+	if err := r.BaseReplicator.CheckReplicationSlotStatus(ctx); err != nil {
+		return fmt.Errorf("failed to check replication slot status: %v", err)
+	}
+
+	return nil
 }
 
 // getStartLSN determines the starting LSN for replication.

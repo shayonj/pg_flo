@@ -71,7 +71,13 @@ func (m *CDCMessage) GetColumnValue(columnName string) (interface{}, error) {
 	}
 
 	column := m.Columns[colIndex]
-	data := m.NewTuple.Columns[colIndex].Data
+	var data []byte
+
+	if m.Type == "DELETE" {
+		data = m.OldTuple.Columns[colIndex].Data
+	} else {
+		data = m.NewTuple.Columns[colIndex].Data
+	}
 
 	return DecodeValue(data, column.DataType)
 }
@@ -89,7 +95,12 @@ func (m *CDCMessage) SetColumnValue(columnName string, value interface{}) error 
 		return err
 	}
 
-	m.NewTuple.Columns[colIndex].Data = encodedValue
+	if m.Type == "DELETE" {
+		m.OldTuple.Columns[colIndex] = &pglogrepl.TupleDataColumn{Data: encodedValue}
+	} else {
+		m.NewTuple.Columns[colIndex] = &pglogrepl.TupleDataColumn{Data: encodedValue}
+	}
+
 	return nil
 }
 

@@ -219,8 +219,6 @@ func TestBaseReplicator(t *testing.T) {
 			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(xLogData, nil).Once()
 			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(nil, context.Canceled).Maybe()
 
-			mockNATSClient.On("GetLastState").Return(pglogrepl.LSN(0), nil).Maybe()
-
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
 				StandardConn:    mockStandardConn,
@@ -232,7 +230,8 @@ func TestBaseReplicator(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 
-			err := br.StartReplicationFromLSN(ctx, pglogrepl.LSN(0))
+			stopChan := make(chan struct{})
+			err := br.StartReplicationFromLSN(ctx, pglogrepl.LSN(0), stopChan)
 			assert.NoError(t, err, "Expected no error for graceful shutdown")
 			mockReplicationConn.AssertExpectations(t)
 			mockStandardConn.AssertExpectations(t)
@@ -252,128 +251,12 @@ func TestBaseReplicator(t *testing.T) {
 				Logger:          zerolog.Nop(),
 			}
 
-			err := br.StartReplicationFromLSN(context.Background(), pglogrepl.LSN(0))
+			stopChan := make(chan struct{})
+			err := br.StartReplicationFromLSN(context.Background(), pglogrepl.LSN(0), stopChan)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to start replication")
 			mockReplicationConn.AssertExpectations(t)
 			mockStandardConn.AssertExpectations(t)
-		})
-	})
-
-	t.Run("StreamChanges", func(t *testing.T) {
-		t.Run("Successful processing of messages", func(t *testing.T) {
-			mockReplicationConn := new(MockReplicationConnection)
-			keepaliveMsg := &pgproto3.CopyData{
-				Data: []byte{
-					pglogrepl.PrimaryKeepaliveMessageByteID,
-					0, 0, 0, 0, 0, 0, 0, 8, // WAL end: 8
-					0, 0, 0, 0, 0, 0, 0, 0, // ServerTime: 0
-					0, // ReplyRequested: false
-				},
-			}
-			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(keepaliveMsg, nil).Once()
-			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(nil, context.Canceled).Once()
-
-			mockNATSClient := new(MockNATSClient)
-			mockNATSClient.On("GetLastState").Return(pglogrepl.LSN(0), nil).Maybe()
-
-			br := &replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-				NATSClient:      mockNATSClient,
-				Logger:          zerolog.Nop(),
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			defer cancel()
-
-			err := br.StreamChanges(ctx)
-			assert.NoError(t, err, "Expected no error for graceful shutdown")
-			mockReplicationConn.AssertExpectations(t)
-			mockNATSClient.AssertExpectations(t)
-		})
-
-		t.Run("Context cancellation", func(t *testing.T) {
-			mockReplicationConn := new(MockReplicationConnection)
-			mockNATSClient := new(MockNATSClient)
-			mockNATSClient.On("GetLastState").Return(pglogrepl.LSN(0), nil).Maybe()
-			mockNATSClient.On("SaveState", mock.Anything).Return(nil).Maybe()
-
-			br := &replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-				NATSClient:      mockNATSClient,
-			}
-
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-
-			err := br.StreamChanges(ctx)
-			assert.NoError(t, err, "Expected no error for graceful shutdown")
-			mockReplicationConn.AssertExpectations(t)
-			mockNATSClient.AssertExpectations(t)
-		})
-	})
-
-	t.Run("ProcessNextMessage", func(t *testing.T) {
-		t.Run("Successful processing of CopyData message", func(t *testing.T) {
-			mockReplicationConn := new(MockReplicationConnection)
-			xLogData := &pgproto3.CopyData{
-				Data: []byte{
-					pglogrepl.XLogDataByteID,
-					0, 0, 0, 0, 0, 0, 0, 1, // WAL start: 1
-					0, 0, 0, 0, 0, 0, 0, 2, // WAL end: 2
-					0, 0, 0, 0, 0, 0, 0, 0, // ServerTime: 0
-					'B',                    // Type: BEGIN
-					0, 0, 0, 0, 0, 0, 0, 1, // LSN: 1
-					0, 0, 0, 0, 0, 0, 0, 2, // End LSN: 2
-					0, 0, 0, 0, 0, 0, 0, 0, // Timestamp
-					0, 0, 0, 1, // XID: 1
-				},
-			}
-			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(xLogData, nil)
-			mockNATSClient := new(MockNATSClient)
-
-			br := &replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-				NATSClient:      mockNATSClient,
-				Logger:          zerolog.Nop(),
-			}
-
-			lastStatusUpdate := time.Now()
-			err := br.ProcessNextMessage(context.Background(), &lastStatusUpdate, time.Second)
-			assert.NoError(t, err)
-			mockReplicationConn.AssertExpectations(t)
-			mockNATSClient.AssertExpectations(t)
-
-			assert.True(t, lastStatusUpdate.After(time.Now().Add(-time.Second)), "lastStatusUpdate should have been updated")
-		})
-
-		t.Run("Successful processing of other message types", func(t *testing.T) {
-			mockReplicationConn := new(MockReplicationConnection)
-			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(&pgproto3.NoticeResponse{}, nil)
-
-			br := &replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-			}
-
-			lastStatusUpdate := time.Now()
-			err := br.ProcessNextMessage(context.Background(), &lastStatusUpdate, time.Second)
-			assert.NoError(t, err)
-			mockReplicationConn.AssertExpectations(t)
-		})
-
-		t.Run("Error occurs while receiving message", func(t *testing.T) {
-			mockReplicationConn := new(MockReplicationConnection)
-			mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(nil, errors.New("receive error"))
-
-			br := &replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-			}
-
-			lastStatusUpdate := time.Now()
-			err := br.ProcessNextMessage(context.Background(), &lastStatusUpdate, time.Second)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to receive message")
-			mockReplicationConn.AssertExpectations(t)
 		})
 	})
 
@@ -1040,37 +923,6 @@ func TestBaseReplicator(t *testing.T) {
 			err := br.SendStandbyStatusUpdate(context.Background())
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to send standby status update")
-			mockReplicationConn.AssertExpectations(t)
-		})
-	})
-
-	t.Run("SendFinalStandbyStatusUpdate", func(t *testing.T) {
-		t.Run("Successful sending of final standby status update", func(t *testing.T) {
-			mockReplicationConn := new(MockReplicationConnection)
-			mockReplicationConn.On("SendStandbyStatusUpdate", mock.Anything, mock.Anything).Return(nil)
-
-			br := &replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-			}
-
-			err := br.SendFinalStandbyStatusUpdate()
-			assert.NoError(t, err)
-
-			mockReplicationConn.AssertExpectations(t)
-		})
-
-		t.Run("Error sending final standby status update", func(t *testing.T) {
-			mockReplicationConn := new(MockReplicationConnection)
-			mockReplicationConn.On("SendStandbyStatusUpdate", mock.Anything, mock.Anything).Return(errors.New("send error"))
-
-			br := &replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-			}
-
-			err := br.SendFinalStandbyStatusUpdate()
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to send standby")
-
 			mockReplicationConn.AssertExpectations(t)
 		})
 	})

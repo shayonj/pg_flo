@@ -113,9 +113,6 @@ test_pg_flo_resume() {
     sleep 1
   done
 
-  log "Inserts completed. Waiting for pg_flo to catch up..."
-  sleep 5
-
   stop_pg_flo_gracefully
 
   if kill -0 $insert_pid 2>/dev/null; then

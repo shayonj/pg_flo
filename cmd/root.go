@@ -86,6 +86,7 @@ func init() {
 	replicatorCmd.Flags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
 	replicatorCmd.Flags().Bool("copy-and-stream", false, "Enable copy and stream mode (env: PG_FLO_COPY_AND_STREAM)")
 	replicatorCmd.Flags().Int("max-copy-workers-per-table", 4, "Maximum number of copy workers per table (env: PG_FLO_MAX_COPY_WORKERS_PER_TABLE)")
+	replicatorCmd.Flags().Bool("track-ddl", false, "Enable tracking of DDL changes (env: PG_FLO_TRACK_DDL)")
 
 	markFlagRequired(replicatorCmd, "host", "port", "dbname", "user", "password", "group", "nats-url")
 
@@ -103,15 +104,21 @@ func init() {
 	fileWorkerCmd.Flags().String("file-output-dir", "/tmp", "Output directory for file sink (env: PG_FLO_FILE_OUTPUT_DIR)")
 
 	// Postgres sink flags
-	postgresWorkerCmd.Flags().String("postgres-host", "", "Target PostgreSQL host (env: PG_FLO_POSTGRES_HOST)")
-	postgresWorkerCmd.Flags().Int("postgres-port", 5432, "Target PostgreSQL port (env: PG_FLO_POSTGRES_PORT)")
-	postgresWorkerCmd.Flags().String("postgres-dbname", "", "Target PostgreSQL database name (env: PG_FLO_POSTGRES_DBNAME)")
-	postgresWorkerCmd.Flags().String("postgres-user", "", "Target PostgreSQL user (env: PG_FLO_POSTGRES_USER)")
-	postgresWorkerCmd.Flags().String("postgres-password", "", "Target PostgreSQL password (env: PG_FLO_POSTGRES_PASSWORD)")
-	postgresWorkerCmd.Flags().Bool("postgres-sync-schema", false, "Sync schema from source to target (env: PG_FLO_POSTGRES_SYNC_SCHEMA)")
-	postgresWorkerCmd.Flags().Bool("postgres-disable-foreign-keys", false, "Disable foreign key checks during write (env: PG_FLO_POSTGRES_DISABLE_FOREIGN_KEYS)")
+	postgresWorkerCmd.Flags().String("target-host", "", "Target PostgreSQL host (env: PG_FLO_TARGET_HOST)")
+	postgresWorkerCmd.Flags().Int("target-port", 5432, "Target PostgreSQL port (env: PG_FLO_TARGET_PORT)")
+	postgresWorkerCmd.Flags().String("target-dbname", "", "Target PostgreSQL database name (env: PG_FLO_TARGET_DBNAME)")
+	postgresWorkerCmd.Flags().String("target-user", "", "Target PostgreSQL user (env: PG_FLO_TARGET_USER)")
+	postgresWorkerCmd.Flags().String("target-password", "", "Target PostgreSQL password (env: PG_FLO_TARGET_PASSWORD)")
+	postgresWorkerCmd.Flags().Bool("target-sync-schema", false, "Sync schema from source to target (env: PG_FLO_TARGET_SYNC_SCHEMA)")
+	postgresWorkerCmd.Flags().Bool("target-disable-foreign-keys", false, "Disable foreign key checks during write (env: PG_FLO_TARGET_DISABLE_FOREIGN_KEYS)")
 
-	markFlagRequired(postgresWorkerCmd, "postgres-host", "postgres-dbname", "postgres-user", "postgres-password")
+	postgresWorkerCmd.Flags().String("source-host", "", "Source PostgreSQL host (env: PG_FLO_SOURCE_HOST)")
+	postgresWorkerCmd.Flags().Int("source-port", 5432, "Source PostgreSQL port (env: PG_FLO_SOURCE_PORT)")
+	postgresWorkerCmd.Flags().String("source-dbname", "", "Source PostgreSQL database name (env: PG_FLO_SOURCE_DBNAME)")
+	postgresWorkerCmd.Flags().String("source-user", "", "Source PostgreSQL user (env: PG_FLO_SOURCE_USER)")
+	postgresWorkerCmd.Flags().String("source-password", "", "Source PostgreSQL password (env: PG_FLO_SOURCE_PASSWORD)")
+
+	markFlagRequired(postgresWorkerCmd, "target-host", "target-dbname", "target-user", "target-password")
 
 	// Webhook sink flags
 	webhookWorkerCmd.Flags().String("webhook-url", "", "Webhook URL to send data (env: PG_FLO_WEBHOOK_URL)")
@@ -174,6 +181,7 @@ func runReplicator(_ *cobra.Command, _ []string) {
 		Group:    viper.GetString("group"),
 		Schema:   viper.GetString("schema"),
 		Tables:   viper.GetStringSlice("tables"),
+		TrackDDL: viper.GetBool("track-ddl"),
 	}
 
 	natsURL := viper.GetString("nats-url")
@@ -236,13 +244,11 @@ func runWorker(cmd *cobra.Command, _ []string) {
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 
-	// Set up signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		sig := <-sigCh
-		log.Info().Msgf("Received shutdown signal: %v. Canceling context...", sig)
+		<-sigCh
 		cancel()
 	}()
 
@@ -254,8 +260,6 @@ func runWorker(cmd *cobra.Command, _ []string) {
 			log.Error().Err(err).Msg("Worker encountered an error during shutdown")
 		}
 	}
-
-	log.Info().Msg("Worker process exiting")
 }
 
 func loadRulesConfig(filePath string) (rules.Config, error) {
@@ -281,18 +285,18 @@ func createSink(sinkType string) (sinks.Sink, error) {
 		)
 	case "postgres":
 		return sinks.NewPostgresSink(
-			viper.GetString("postgres-host"),
-			viper.GetInt("postgres-port"),
-			viper.GetString("postgres-dbname"),
-			viper.GetString("postgres-user"),
-			viper.GetString("postgres-password"),
-			viper.GetBool("postgres-sync-schema"),
-			viper.GetString("host"),
-			viper.GetInt("port"),
-			viper.GetString("dbname"),
-			viper.GetString("user"),
-			viper.GetString("password"),
-			viper.GetBool("postgres-disable-foreign-keys"),
+			viper.GetString("target-host"),
+			viper.GetInt("target-port"),
+			viper.GetString("target-dbname"),
+			viper.GetString("target-user"),
+			viper.GetString("target-password"),
+			viper.GetBool("target-sync-schema"),
+			viper.GetString("source-host"),
+			viper.GetInt("source-port"),
+			viper.GetString("source-dbname"),
+			viper.GetString("source-user"),
+			viper.GetString("source-password"),
+			viper.GetBool("target-disable-foreign-keys"),
 		)
 	case "webhook":
 		return sinks.NewWebhookSink(

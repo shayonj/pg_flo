@@ -9,11 +9,9 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
-	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog"
 	"github.com/shayonj/pg_flo/pkg/replicator"
 	"github.com/shayonj/pg_flo/pkg/utils"
@@ -22,75 +20,6 @@ import (
 )
 
 func TestCopyAndStreamReplicator(t *testing.T) {
-
-	t.Run("StartReplication", func(t *testing.T) {
-		mockReplicationConn := new(MockReplicationConnection)
-		mockStandardConn := new(MockStandardConnection)
-		mockNATSClient := new(MockNATSClient)
-		mockTx := new(MockTx)
-
-		mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).Return(MockRow{
-			scanFunc: func(dest ...interface{}) error {
-				*dest[0].(*bool) = true
-				return nil
-			},
-		}).Once()
-
-		mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", mock.Anything).Return(MockRow{
-			scanFunc: func(dest ...interface{}) error {
-				*dest[0].(*bool) = false
-				return nil
-			},
-		}).Once()
-
-		mockReplicationConn.On("CreateReplicationSlot", mock.Anything, mock.Anything).Return(pglogrepl.CreateReplicationSlotResult{}, nil)
-		mockReplicationConn.On("StartReplication", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockReplicationConn.On("ReceiveMessage", mock.Anything).Return(
-			&pgproto3.ReadyForQuery{TxStatus: 'I'},
-			context.Canceled,
-		)
-
-		mockStandardConn.On("BeginTx", mock.Anything, mock.AnythingOfType("pgx.TxOptions")).Return(mockTx, nil)
-
-		mockStandardConn.On("QueryRow", mock.Anything, mock.MatchedBy(func(query string) bool {
-			return strings.Contains(query, "SELECT relpages")
-		}), mock.Anything).Return(MockRow{
-			scanFunc: func(dest ...interface{}) error {
-				*dest[0].(*uint32) = 1
-				return nil
-			},
-		})
-
-		mockTx.On("QueryRow", mock.Anything, mock.MatchedBy(func(query string) bool {
-			return strings.Contains(query, "pg_export_snapshot()") && strings.Contains(query, "pg_current_wal_lsn()")
-		})).Return(MockRow{
-			scanFunc: func(dest ...interface{}) error {
-				*dest[0].(*string) = "mock-snapshot-id"
-				*dest[1].(*pglogrepl.LSN) = pglogrepl.LSN(100)
-				return nil
-			},
-		})
-
-		mockTx.On("Commit", mock.Anything).Return(nil)
-
-		csr := &replicator.CopyAndStreamReplicator{
-			BaseReplicator: replicator.BaseReplicator{
-				ReplicationConn: mockReplicationConn,
-				StandardConn:    mockStandardConn,
-				NATSClient:      mockNATSClient,
-				Logger:          zerolog.Nop(),
-				Config:          replicator.Config{Group: "test_publication", Tables: []string{"users"}, Schema: "public"},
-			},
-		}
-
-		err := csr.StartReplication()
-		assert.NoError(t, err)
-
-		mockReplicationConn.AssertExpectations(t)
-		mockStandardConn.AssertExpectations(t)
-		mockNATSClient.AssertExpectations(t)
-		mockTx.AssertExpectations(t)
-	})
 
 	t.Run("CopyTable", func(t *testing.T) {
 		mockStandardConn := new(MockStandardConnection)

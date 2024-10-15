@@ -19,7 +19,11 @@ create_users() {
 
 start_pg_flo_replication() {
   log "Starting pg_flo replication..."
-  $pg_flo_BIN stream file \
+  if [ -f "$pg_flo_LOG" ]; then
+    mv "$pg_flo_LOG" "${pg_flo_LOG}.bak"
+    log "Backed up previous replicator log to ${pg_flo_LOG}.bak"
+  fi
+  $pg_flo_BIN replicator \
     --host "$PG_HOST" \
     --port "$PG_PORT" \
     --dbname "$PG_DB" \
@@ -28,14 +32,28 @@ start_pg_flo_replication() {
     --group "group_transform_filter" \
     --tables "users" \
     --schema "public" \
-    --status-dir "/tmp" \
-    --output-dir "$OUTPUT_DIR" \
-    --track-ddl \
-    --rules-config "$(dirname "$0")/rules.yml" >"$pg_flo_LOG" 2>&1 &
-
+    --nats-url "$NATS_URL" \
+    >"$pg_flo_LOG" 2>&1 &
   pg_flo_PID=$!
-  log "pg_flo started with PID: $pg_flo_PID"
+  log "pg_flo replicator started with PID: $pg_flo_PID"
   success "pg_flo replication started"
+}
+
+start_pg_flo_worker() {
+  log "Starting pg_flo worker with file sink..."
+  if [ -f "$pg_flo_WORKER_LOG" ]; then
+    mv "$pg_flo_WORKER_LOG" "${pg_flo_WORKER_LOG}.bak"
+    log "Backed up previous worker log to ${pg_flo_WORKER_LOG}.bak"
+  fi
+  $pg_flo_BIN worker file \
+    --group "group_transform_filter" \
+    --nats-url "$NATS_URL" \
+    --file-output-dir "$OUTPUT_DIR" \
+    --rules-config "$(dirname "$0")/rules.yml" \
+    >"$pg_flo_WORKER_LOG" 2>&1 &
+  pg_flo_WORKER_PID=$!
+  log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
+  success "pg_flo worker started"
 }
 
 simulate_changes() {
@@ -54,15 +72,15 @@ simulate_changes() {
 
 verify_changes() {
   log "Verifying changes..."
-  local insert_count=$(jq -s '[.[] | select(.type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
-  local update_count=$(jq -s '[.[] | select(.type == "UPDATE")] | length' "$OUTPUT_DIR"/*.jsonl)
-  local delete_count=$(jq -s '[.[] | select(.type == "DELETE")] | length' "$OUTPUT_DIR"/*.jsonl)
+  local insert_count=$(jq -s '[.[] | select(.Type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
+  local update_count=$(jq -s '[.[] | select(.Type == "UPDATE")] | length' "$OUTPUT_DIR"/*.jsonl)
+  local delete_count=$(jq -s '[.[] | select(.Type == "DELETE")] | length' "$OUTPUT_DIR"/*.jsonl)
 
   log "INSERT count: $insert_count (expected 2)"
   log "UPDATE count: $update_count (expected 1)"
   log "DELETE count: $delete_count (expected 2)"
 
-  if [ "$insert_count" -eq 2 ] && [ "$update_count" -eq 1 ]; then
+  if [ "$insert_count" -eq 2 ] && [ "$update_count" -eq 1 ] && [ "$delete_count" -eq 2 ]; then
     success "Change counts match expected values"
   else
     error "Change counts do not match expected values"
@@ -70,12 +88,12 @@ verify_changes() {
   fi
 
   # Verify transformations and filters
-  local masked_email=$(jq -r 'select(.type == "INSERT" and .new_row.id.value == 1) | .new_row.email.value' "$OUTPUT_DIR"/*.jsonl)
-  local formatted_phone=$(jq -r 'select(.type == "INSERT" and .new_row.id.value == 1) | .new_row.phone.value' "$OUTPUT_DIR"/*.jsonl)
-  local filtered_insert=$(jq -r 'select(.type == "INSERT" and .new_row.id.value == 2) | .new_row.id.value' "$OUTPUT_DIR"/*.jsonl)
-  local updated_email=$(jq -r 'select(.type == "UPDATE") | .new_row.email.value' "$OUTPUT_DIR"/*.jsonl)
-  local masked_ssn=$(jq -r 'select(.type == "INSERT" and .new_row.id.value == 1) | .new_row.ssn.value' "$OUTPUT_DIR"/*.jsonl)
-  local filtered_age=$(jq -r 'select(.type == "INSERT" and .new_row.id.value == 2) | .new_row.age.value' "$OUTPUT_DIR"/*.jsonl)
+  local masked_email=$(jq -r 'select(.Type == "INSERT" and .NewTuple.id == 1) | .NewTuple.email' "$OUTPUT_DIR"/*.jsonl)
+  local formatted_phone=$(jq -r 'select(.Type == "INSERT" and .NewTuple.id == 1) | .NewTuple.phone' "$OUTPUT_DIR"/*.jsonl)
+  local filtered_insert=$(jq -r 'select(.Type == "INSERT" and .NewTuple.id == 2) | .NewTuple.id' "$OUTPUT_DIR"/*.jsonl)
+  local updated_email=$(jq -r 'select(.Type == "UPDATE") | .NewTuple.email' "$OUTPUT_DIR"/*.jsonl)
+  local masked_ssn=$(jq -r 'select(.Type == "INSERT" and .NewTuple.id == 1) | .NewTuple.ssn' "$OUTPUT_DIR"/*.jsonl)
+  local filtered_age=$(jq -r 'select(.Type == "INSERT" and .NewTuple.id == 2) | .NewTuple.age' "$OUTPUT_DIR"/*.jsonl)
 
   if [[ "$masked_email" == "j**************m" ]] &&
     [[ "$formatted_phone" == "(123) 456-7890" ]] &&
@@ -100,11 +118,11 @@ test_pg_flo_transform_filter() {
   setup_postgres
   create_users
   start_pg_flo_replication
-  sleep 1
+  start_pg_flo_worker
+  sleep 2
   simulate_changes
 
   log "Waiting for pg_flo to process changes..."
-  sleep 5
 
   stop_pg_flo_gracefully
   verify_changes || return 1

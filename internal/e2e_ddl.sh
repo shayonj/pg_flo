@@ -12,7 +12,11 @@ create_users() {
 
 start_pg_flo_replication() {
   log "Starting pg_flo replication..."
-  $pg_flo_BIN stream file \
+  if [ -f "$pg_flo_LOG" ]; then
+    mv "$pg_flo_LOG" "${pg_flo_LOG}.bak"
+    log "Backed up previous replicator log to ${pg_flo_LOG}.bak"
+  fi
+  $pg_flo_BIN replicator \
     --host "$PG_HOST" \
     --port "$PG_PORT" \
     --dbname "$PG_DB" \
@@ -21,12 +25,28 @@ start_pg_flo_replication() {
     --group "group_ddl" \
     --tables "users" \
     --schema "public" \
-    --status-dir "/tmp" \
-    --output-dir "$OUTPUT_DIR" \
-    --track-ddl >"$pg_flo_LOG" >"$pg_flo_LOG" 2>&1 &
+    --nats-url "$NATS_URL" \
+    --track-ddl \
+    >"$pg_flo_LOG" 2>&1 &
   pg_flo_PID=$!
-  log "pg_flo started with PID: $pg_flo_PID"
+  log "pg_flo replicator started with PID: $pg_flo_PID"
   success "pg_flo replication started"
+}
+
+start_pg_flo_worker() {
+  log "Starting pg_flo worker with file sink..."
+  if [ -f "$pg_flo_WORKER_LOG" ]; then
+    mv "$pg_flo_WORKER_LOG" "${pg_flo_WORKER_LOG}.bak"
+    log "Backed up previous worker log to ${pg_flo_WORKER_LOG}.bak"
+  fi
+  $pg_flo_BIN worker file \
+    --group "group_ddl" \
+    --nats-url "$NATS_URL" \
+    --file-output-dir "$OUTPUT_DIR" \
+    >"$pg_flo_WORKER_LOG" 2>&1 &
+  pg_flo_WORKER_PID=$!
+  log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
+  success "pg_flo worker started"
 }
 
 perform_ddl_operations() {
@@ -42,7 +62,7 @@ perform_ddl_operations() {
 
 verify_ddl_changes() {
   log "Verifying DDL changes..."
-  local ddl_events=$(jq -s '[.[] | select(.type == "DDL")]' "$OUTPUT_DIR"/*.jsonl)
+  local ddl_events=$(jq -s '[.[] | select(.Type == "DDL")]' "$OUTPUT_DIR"/*.jsonl)
   local ddl_count=$(echo "$ddl_events" | jq 'length')
   log "DDL event count: $ddl_count (expected 6)"
 
@@ -64,7 +84,7 @@ verify_ddl_changes() {
   )
 
   for i in "${!expected_commands[@]}"; do
-    local command=$(echo "$ddl_events" | jq -r ".[$i].command")
+    local command=$(echo "$ddl_events" | jq -r ".[$i].NewTuple.ddl_command")
     if [[ "$command" == "${expected_commands[$i]}" ]]; then
       success "DDL command $((i + 1)) matches expected value"
     else
@@ -76,7 +96,7 @@ verify_ddl_changes() {
   done
 
   # Check for table_rewrite event
-  local table_rewrite_event=$(echo "$ddl_events" | jq '.[] | select(.event_type == "table_rewrite")')
+  local table_rewrite_event=$(echo "$ddl_events" | jq '.[] | select(.NewTuple.event_type == "table_rewrite")')
   if [ -n "$table_rewrite_event" ]; then
     success "table_rewrite event detected"
   else
@@ -100,8 +120,11 @@ test_pg_flo_ddl() {
   setup_postgres
   create_users
   start_pg_flo_replication
-  sleep 2
+  sleep 1
   perform_ddl_operations
+  sleep 2
+  start_pg_flo_worker
+  sleep 2
   stop_pg_flo_gracefully
   verify_ddl_changes || return 1
 }

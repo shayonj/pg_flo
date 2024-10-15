@@ -56,6 +56,7 @@ func (s *PostgresSink) syncSchema(sourceHost string, sourcePort int, sourceDBNam
 	)
 	schemaDump, err := dumpCmd.Output()
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to dump schema from source database")
 		return fmt.Errorf("failed to dump schema from source database: %v", err)
 	}
 

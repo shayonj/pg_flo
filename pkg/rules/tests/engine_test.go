@@ -147,6 +147,7 @@ func TestRuleEngine_LoadRules(t *testing.T) {
 				{Data: []byte("101")},
 			},
 		},
+		OldTuple: nil,
 	}
 
 	result, err := re.ApplyRules(message)
@@ -161,6 +162,13 @@ func TestRuleEngine_LoadRules(t *testing.T) {
 	assert.Equal(t, int64(101), idValue)
 
 	message.Type = "DELETE"
+	message.OldTuple = &pglogrepl.TupleData{
+		Columns: []*pglogrepl.TupleDataColumn{
+			{Data: []byte("test")},
+			{Data: []byte("101")},
+		},
+	}
+	message.NewTuple = nil
 	result, err = re.ApplyRules(message)
 
 	assert.NoError(t, err)
@@ -172,7 +180,7 @@ func TestRuleEngine_LoadRules(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(101), idValue)
 
-	message.NewTuple.Columns[1].Data = []byte("99")
+	message.OldTuple.Columns[1].Data = []byte("99")
 	result, err = re.ApplyRules(message)
 
 	assert.NoError(t, err)
