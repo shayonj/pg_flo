@@ -3,6 +3,7 @@
 -## ![](internal/demo.gif)
 
 [![CI](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml)
+[![Integration  ](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml)
 
 `pg_flo` is the easiest way to move and transform data between PostgreSQL databases. It uses PostgreSQL Logical Replication to stream inserts, updates, deletes, and DDL changes to multiple destinations. With support for parallelizable bulk copy, near real-time streaming, and powerful transformation and filtering rules, `pg_flo` simplifies data sync and ETL processes.
 
