@@ -12,9 +12,12 @@ TARGET_PG_USER="${TARGET_PG_USER:-targetuser}"
 TARGET_PG_PASSWORD="${TARGET_PG_PASSWORD:-targetpassword}"
 TARGET_PG_DB="${TARGET_PG_DB:-targetdb}"
 
+NATS_URL="${NATS_URL:-nats://localhost:4222}"
+
 pg_flo_BIN="./bin/pg_flo"
 OUTPUT_DIR="/tmp/pg_flo-output"
 pg_flo_LOG="/tmp/pg_flo.log"
+pg_flo_WORKER_LOG="/tmp/pg_flo_worker.log"
 
 # Helper functions
 log() { echo "🔹 $1"; }
@@ -39,19 +42,33 @@ setup_postgres() {
 }
 
 stop_pg_flo_gracefully() {
-  log "Stopping pg_flo..."
+  log "Stopping pg_flo replicator..."
   if kill -0 "$pg_flo_PID" 2>/dev/null; then
     kill -TERM "$pg_flo_PID"
     wait "$pg_flo_PID" 2>/dev/null || true
-    success "pg_flo stopped"
+    success "pg_flo replicator stopped"
   else
-    log "pg_flo process not found, it may have already completed"
+    log "pg_flo replicator process not found, it may have already completed"
+  fi
+
+  log "Stopping pg_flo worker..."
+  if kill -0 "$pg_flo_WORKER_PID" 2>/dev/null; then
+    kill -TERM "$pg_flo_WORKER_PID"
+    wait "$pg_flo_WORKER_PID" 2>/dev/null || true
+    success "pg_flo worker stopped"
+  else
+    log "pg_flo worker process not found, it may have already completed"
   fi
 }
 
 show_pg_flo_logs() {
-  log "pg_flo logs:"
+  log "pg_flo replicator logs:"
   echo "----------------------------------------"
-  cat $pg_flo_LOG
+  cat $pg_flo_LOG*
+  echo "----------------------------------------"
+
+  log "pg_flo worker logs:"
+  echo "----------------------------------------"
+  cat $pg_flo_WORKER_LOG*
   echo "----------------------------------------"
 }

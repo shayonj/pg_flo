@@ -2,28 +2,23 @@ package replicator
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"errors"
 
 	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog"
-	"github.com/shayonj/pg_flo/pkg/rules"
-	"github.com/shayonj/pg_flo/pkg/sinks"
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 // GeneratePublicationName generates a deterministic publication name based on the group name
 func GeneratePublicationName(group string) string {
 	group = strings.ReplaceAll(group, "-", "_")
-	return fmt.Sprintf("%s_publication", group)
+	return fmt.Sprintf("pg_flo_%s_publication", group)
 }
 
 // BaseReplicator provides core functionality for PostgreSQL logical replication
@@ -31,33 +26,29 @@ type BaseReplicator struct {
 	Config          Config
 	ReplicationConn ReplicationConnection
 	StandardConn    StandardConnection
-	Sink            sinks.Sink
 	Relations       map[uint32]*pglogrepl.RelationMessage
 	Logger          zerolog.Logger
 	TableDetails    map[string][]string
-	Buffer          *Buffer
 	LastLSN         pglogrepl.LSN
-	RuleEngine      *rules.RuleEngine
+	NATSClient      NATSClient
 }
 
 // NewBaseReplicator creates a new BaseReplicator instance
-func NewBaseReplicator(config Config, sink sinks.Sink, replicationConn ReplicationConnection, StandardConn StandardConnection, ruleEngine *rules.RuleEngine) *BaseReplicator {
+func NewBaseReplicator(config Config, replicationConn ReplicationConnection, standardConn StandardConnection, natsClient NATSClient) *BaseReplicator {
 	logger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()
 
 	br := &BaseReplicator{
 		Config:          config,
 		ReplicationConn: replicationConn,
-		StandardConn:    StandardConn,
-		Sink:            sink,
+		StandardConn:    standardConn,
 		Relations:       make(map[uint32]*pglogrepl.RelationMessage),
 		Logger:          logger,
 		TableDetails:    make(map[string][]string),
-		Buffer:          NewBuffer(1000, 5*time.Second), // 1000 rows or 5 seconds
-		RuleEngine:      ruleEngine,
+		NATSClient:      natsClient,
 	}
 
 	// Initialize the OID map with custom types from the database
-	if err := InitializeOIDMap(context.Background(), StandardConn); err != nil {
+	if err := InitializeOIDMap(context.Background(), standardConn); err != nil {
 		br.Logger.Error().Err(err).Msg("Failed to initialize OID map")
 	}
 
@@ -65,7 +56,17 @@ func NewBaseReplicator(config Config, sink sinks.Sink, replicationConn Replicati
 		br.Logger.Error().Err(err).Msg("Failed to initialize primary key info")
 	}
 
-	br.StartPeriodicFlush()
+	publicationName := GeneratePublicationName(config.Group)
+	br.Logger.Info().
+		Str("host", config.Host).
+		Int("port", int(config.Port)).
+		Str("database", config.Database).
+		Str("user", config.User).
+		Str("group", config.Group).
+		Str("schema", config.Schema).
+		Strs("tables", config.Tables).
+		Str("publication", publicationName).
+		Msg("Starting PostgreSQL logical replication stream")
 
 	return br
 }
@@ -97,9 +98,18 @@ func (r *BaseReplicator) CreatePublication() error {
 func (r *BaseReplicator) buildCreatePublicationQuery() string {
 	publicationName := GeneratePublicationName(r.Config.Group)
 	if len(r.Config.Tables) == 0 {
-		return fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES", publicationName)
+		return fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES",
+			pgx.Identifier{publicationName}.Sanitize())
 	}
-	return fmt.Sprintf("CREATE PUBLICATION \"%s\" FOR TABLE %s", publicationName, pgx.Identifier(r.Config.Tables).Sanitize())
+
+	fullyQualifiedTables := make([]string, len(r.Config.Tables))
+	for i, table := range r.Config.Tables {
+		fullyQualifiedTables[i] = pgx.Identifier{r.Config.Schema, table}.Sanitize()
+	}
+
+	return fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s",
+		pgx.Identifier{publicationName}.Sanitize(),
+		strings.Join(fullyQualifiedTables, ", "))
 }
 
 // checkPublicationExists checks if a publication with the given name exists
@@ -113,9 +123,10 @@ func (r *BaseReplicator) checkPublicationExists(publicationName string) (bool, e
 }
 
 // StartReplicationFromLSN initiates the replication process from a given LSN
-func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN pglogrepl.LSN) error {
-
+func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN pglogrepl.LSN, stopChan <-chan struct{}) error {
 	publicationName := GeneratePublicationName(r.Config.Group)
+	r.Logger.Info().Str("startLSN", startLSN.String()).Str("publication", publicationName).Msg("Starting replication")
+
 	err := r.ReplicationConn.StartReplication(ctx, publicationName, startLSN, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{
 			"proto_version '1'",
@@ -128,30 +139,21 @@ func (r *BaseReplicator) StartReplicationFromLSN(ctx context.Context, startLSN p
 
 	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Replication started successfully")
 
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- r.StreamChanges(ctx)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return r.gracefulShutdown()
-	case err := <-errChan:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-		return nil
-	}
+	return r.StreamChanges(ctx, stopChan)
 }
 
 // StreamChanges continuously processes replication messages
-func (r *BaseReplicator) StreamChanges(ctx context.Context) error {
+func (r *BaseReplicator) StreamChanges(ctx context.Context, stopChan <-chan struct{}) error {
 	lastStatusUpdate := time.Now()
 	standbyMessageTimeout := time.Second * 10
 
 	for {
 		select {
 		case <-ctx.Done():
+			r.Logger.Info().Msg("Stopping StreamChanges")
+			return nil
+		case <-stopChan:
+			r.Logger.Info().Msg("Stop signal received, exiting StreamChanges")
 			return nil
 		default:
 			if err := r.ProcessNextMessage(ctx, &lastStatusUpdate, standbyMessageTimeout); err != nil {
@@ -168,10 +170,12 @@ func (r *BaseReplicator) StreamChanges(ctx context.Context) error {
 func (r *BaseReplicator) ProcessNextMessage(ctx context.Context, lastStatusUpdate *time.Time, standbyMessageTimeout time.Duration) error {
 	msg, err := r.ReplicationConn.ReceiveMessage(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("context error while receiving message: %w", ctx.Err())
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			r.Logger.Info().Msg("Context canceled or deadline exceeded, stopping message processing")
+			return nil
 		}
-		return fmt.Errorf("failed to receive message: %w", err)
+		r.Logger.Error().Err(err).Msg("Error processing next message")
+		return err
 	}
 
 	switch msg := msg.(type) {
@@ -179,8 +183,21 @@ func (r *BaseReplicator) ProcessNextMessage(ctx context.Context, lastStatusUpdat
 		if err := r.handleCopyData(ctx, msg, lastStatusUpdate); err != nil {
 			return err
 		}
+	case *pgproto3.CopyDone:
+		r.Logger.Info().Msg("Received CopyDone message")
+	case *pgproto3.ReadyForQuery:
+		r.Logger.Info().Msg("Received ReadyForQuery message")
+	case *pgproto3.ErrorResponse:
+		r.Logger.Error().
+			Str("severity", msg.Severity).
+			Str("code", msg.Code).
+			Str("message", msg.Message).
+			Any("msg", msg).
+			Msg("Received ErrorResponse")
 	default:
-		r.Logger.Warn().Type("message", msg).Msg("Received unexpected message")
+		r.Logger.Warn().
+			Str("type", fmt.Sprintf("%T", msg)).
+			Msg("Received unexpected message type")
 	}
 
 	if time.Since(*lastStatusUpdate) >= standbyMessageTimeout {
@@ -197,7 +214,7 @@ func (r *BaseReplicator) ProcessNextMessage(ctx context.Context, lastStatusUpdat
 func (r *BaseReplicator) handleCopyData(ctx context.Context, msg *pgproto3.CopyData, lastStatusUpdate *time.Time) error {
 	switch msg.Data[0] {
 	case pglogrepl.XLogDataByteID:
-		return r.handleXLogData(msg.Data[1:], lastStatusUpdate)
+		return r.handleXLogData(ctx, msg.Data[1:], lastStatusUpdate)
 	case pglogrepl.PrimaryKeepaliveMessageByteID:
 		return r.handlePrimaryKeepaliveMessage(ctx, msg.Data[1:], lastStatusUpdate)
 	default:
@@ -207,13 +224,13 @@ func (r *BaseReplicator) handleCopyData(ctx context.Context, msg *pgproto3.CopyD
 }
 
 // handleXLogData processes XLogData messages
-func (r *BaseReplicator) handleXLogData(data []byte, lastStatusUpdate *time.Time) error {
+func (r *BaseReplicator) handleXLogData(ctx context.Context, data []byte, lastStatusUpdate *time.Time) error {
 	xld, err := pglogrepl.ParseXLogData(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse XLogData: %w", err)
 	}
 
-	if err := r.processWALData(xld.WALData); err != nil {
+	if err := r.processWALData(ctx, xld.WALData); err != nil {
 		return fmt.Errorf("failed to process WAL data: %w", err)
 	}
 
@@ -237,7 +254,7 @@ func (r *BaseReplicator) handlePrimaryKeepaliveMessage(ctx context.Context, data
 }
 
 // processWALData handles different types of WAL messages
-func (r *BaseReplicator) processWALData(walData []byte) error {
+func (r *BaseReplicator) processWALData(ctx context.Context, walData []byte) error {
 	logicalMsg, err := pglogrepl.Parse(walData)
 	if err != nil {
 		return fmt.Errorf("failed to parse WAL data: %w", err)
@@ -247,17 +264,15 @@ func (r *BaseReplicator) processWALData(walData []byte) error {
 	case *pglogrepl.RelationMessage:
 		r.handleRelationMessage(msg)
 	case *pglogrepl.BeginMessage:
-		r.HandleBeginMessage(msg)
-		return nil
+		return r.HandleBeginMessage(ctx, msg)
 	case *pglogrepl.InsertMessage:
-		return r.HandleInsertMessage(msg)
+		return r.HandleInsertMessage(ctx, msg)
 	case *pglogrepl.UpdateMessage:
-		return r.HandleUpdateMessage(msg)
+		return r.HandleUpdateMessage(ctx, msg)
 	case *pglogrepl.DeleteMessage:
-		return r.HandleDeleteMessage(msg)
+		return r.HandleDeleteMessage(ctx, msg)
 	case *pglogrepl.CommitMessage:
-		r.HandleCommitMessage(msg)
-		return nil
+		return r.HandleCommitMessage(ctx, msg)
 	default:
 		r.Logger.Warn().Type("message", msg).Msg("Received unexpected logical replication message")
 	}
@@ -272,213 +287,107 @@ func (r *BaseReplicator) handleRelationMessage(msg *pglogrepl.RelationMessage) {
 }
 
 // HandleBeginMessage handles BeginMessage messages
-func (r *BaseReplicator) HandleBeginMessage(msg *pglogrepl.BeginMessage) {
-	// If this we needed for sinks, we can write to buffer
-	// beginJSON, err := MarshalJSON(map[string]interface{}{
-	// 	"type":             "BEGIN",
-	// 	"final_lsn":        msg.FinalLSN,
-	// 	"commit_timestamp": msg.CommitTime,
-	// })
-
-	r.Logger.Debug().Str("final_lsn", msg.FinalLSN.String()).Msg("Received BEGIN")
+func (r *BaseReplicator) HandleBeginMessage(_ context.Context, _ *pglogrepl.BeginMessage) error {
+	return nil
 }
 
 // HandleInsertMessage handles InsertMessage messages
-func (r *BaseReplicator) HandleInsertMessage(msg *pglogrepl.InsertMessage) error {
+func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl.InsertMessage) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
 	}
 
-	newRow := r.ConvertTupleDataToMap(relation, msg.Tuple)
-
-	// Apply rules
-	if r.RuleEngine != nil {
-		var err error
-		newRow, err = r.RuleEngine.ApplyRules(relation.RelationName, newRow, rules.OperationInsert)
-		if err != nil {
-			r.Logger.Error().Err(err).Msg("Failed to apply rules")
-			return fmt.Errorf("failed to apply rules: %w", err)
-		}
-		if newRow == nil {
-			// Row filtered out by rules
-			return nil
-		}
+	cdcMessage := utils.CDCMessage{
+		Type:      "INSERT",
+		Schema:    relation.Namespace,
+		Table:     relation.RelationName,
+		Columns:   relation.Columns,
+		EmittedAt: time.Now(),
+		NewTuple:  msg.Tuple,
 	}
 
-	insertData := map[string]interface{}{
-		"type":    "INSERT",
-		"schema":  relation.Namespace,
-		"table":   relation.RelationName,
-		"new_row": newRow,
-	}
-	r.addPrimaryKeyInfo(insertData, relation.RelationName)
-	if err := r.bufferWrite(insertData); err != nil {
-		return fmt.Errorf("failed to buffer write: %w", err)
-	}
-	return nil
+	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
+	return r.PublishToNATS(ctx, cdcMessage)
 }
 
 // HandleUpdateMessage handles UpdateMessage messages
-func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage) error {
+func (r *BaseReplicator) HandleUpdateMessage(ctx context.Context, msg *pglogrepl.UpdateMessage) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
 	}
-	var oldRow, newRow = map[string]utils.CDCValue{}, map[string]utils.CDCValue{}
 
-	if msg.OldTuple != nil {
-		oldRow = r.ConvertTupleDataToMap(relation, msg.OldTuple)
-	}
-
-	if msg.NewTuple != nil {
-		newRow = r.ConvertTupleDataToMap(relation, msg.NewTuple)
-	}
-
-	// Apply rules only for new row
-	if r.RuleEngine != nil {
-		var err error
-		newRow, err = r.RuleEngine.ApplyRules(relation.RelationName, newRow, rules.OperationUpdate)
-		if err != nil {
-			r.Logger.Error().Err(err).Msg("Failed to apply rules")
-			return fmt.Errorf("failed to apply rules: %w", err)
-		}
-		if newRow == nil {
-			// Row filtered out by rules
-			return nil
-		}
+	cdcMessage := utils.CDCMessage{
+		Type:     "UPDATE",
+		Schema:   relation.Namespace,
+		Table:    relation.RelationName,
+		Columns:  relation.Columns,
+		NewTuple: msg.NewTuple,
+		OldTuple: msg.OldTuple,
 	}
 
-	updateData := map[string]interface{}{
-		"type":    "UPDATE",
-		"schema":  relation.Namespace,
-		"table":   relation.RelationName,
-		"old_row": oldRow,
-		"new_row": newRow,
-	}
-	r.addPrimaryKeyInfo(updateData, relation.RelationName)
-	if err := r.bufferWrite(updateData); err != nil {
-		return fmt.Errorf("failed to buffer write: %w", err)
-	}
-	return nil
+	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
+	return r.PublishToNATS(ctx, cdcMessage)
 }
 
 // HandleDeleteMessage handles DeleteMessage messages
-func (r *BaseReplicator) HandleDeleteMessage(msg *pglogrepl.DeleteMessage) error {
+func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl.DeleteMessage) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
 	}
 
-	oldRow := r.ConvertTupleDataToMap(relation, msg.OldTuple)
-
-	// Apply rules
-	if r.RuleEngine != nil {
-		var err error
-		oldRow, err = r.RuleEngine.ApplyRules(relation.RelationName, oldRow, rules.OperationDelete)
-		if err != nil {
-			r.Logger.Error().Err(err).Msg("Failed to apply rules")
-			return fmt.Errorf("failed to apply rules: %w", err)
-		}
-		if oldRow == nil {
-			// Row filtered out by rules
-			return nil
-		}
+	// todo: write lsn
+	cdcMessage := utils.CDCMessage{
+		Type:      "DELETE",
+		Schema:    relation.Namespace,
+		Table:     relation.RelationName,
+		Columns:   relation.Columns,
+		OldTuple:  msg.OldTuple,
+		EmittedAt: time.Now(),
 	}
 
-	deleteData := map[string]interface{}{
-		"type":    "DELETE",
-		"schema":  relation.Namespace,
-		"table":   relation.RelationName,
-		"old_row": oldRow,
-	}
-	r.addPrimaryKeyInfo(deleteData, relation.RelationName)
-	if err := r.bufferWrite(deleteData); err != nil {
-		return fmt.Errorf("failed to buffer write: %w", err)
-	}
-	return nil
+	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
+	return r.PublishToNATS(ctx, cdcMessage)
 }
 
-// HandleCommitMessage processes a commit message and writes it to the buffer
-func (r *BaseReplicator) HandleCommitMessage(msg *pglogrepl.CommitMessage) {
-	// If this we needed for sinks, we can write to buffer
-	// commitJSON, err := MarshalJSON(map[string]interface{}{
-	// 	"type":             "COMMIT",
-	// 	"lsn":              msg.CommitLSN,
-	// 	"end_lsn":          msg.TransactionEndLSN,
-	// 	"commit_timestamp": msg.CommitTime,
-	// })
-
-	r.Logger.Debug().Str("lsn", msg.CommitLSN.String()).Str("transaction_end_lsn", msg.TransactionEndLSN.String()).Msg("Received COMMIT")
+// HandleCommitMessage processes a commit message and publishes it to NATS
+func (r *BaseReplicator) HandleCommitMessage(ctx context.Context, msg *pglogrepl.CommitMessage) error {
 	r.LastLSN = msg.CommitLSN
-}
 
-// bufferWrite adds data to the buffer and flushes if necessary
-func (r *BaseReplicator) bufferWrite(data interface{}) error {
-	shouldFlush := r.Buffer.Add(data)
-	if shouldFlush {
-		return r.FlushBuffer()
-	}
-	return nil
-}
-
-// FlushBuffer writes the buffered data to the sink
-func (r *BaseReplicator) FlushBuffer() error {
-	data := r.Buffer.Flush()
-	if len(data) == 0 {
-		return nil
-	}
-
-	if err := r.Sink.WriteBatch(data); err != nil {
-		return fmt.Errorf("failed to write batch: %w", err)
-	}
-
-	if err := r.Sink.SetLastLSN(r.LastLSN); err != nil {
-		return fmt.Errorf("failed to update last LSN: %w", err)
+	if err := r.SaveState(ctx, msg.CommitLSN); err != nil {
+		r.Logger.Error().Err(err).Msg("Failed to save replication state")
+		return err
 	}
 
 	return nil
 }
 
-// ConvertTupleDataToMap converts tuple data to a map
-func (r *BaseReplicator) ConvertTupleDataToMap(relation *pglogrepl.RelationMessage, tuple *pglogrepl.TupleData) map[string]utils.CDCValue {
-	result := make(map[string]utils.CDCValue)
-	for i, col := range tuple.Columns {
-		columnName := relation.Columns[i].Name
-		dataType := relation.Columns[i].DataType
-
-		if col.Data == nil {
-			result[columnName] = utils.CDCValue{Type: dataType, Value: nil}
-			continue
-		}
-
-		value := r.convertColumnValue(dataType, col.Data)
-		result[columnName] = utils.CDCValue{Type: dataType, Value: value}
+// PublishToNATS publishes a message to NATS
+func (r *BaseReplicator) PublishToNATS(ctx context.Context, data utils.CDCMessage) error {
+	binaryData, err := data.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
 	}
-	return result
+
+	subject := fmt.Sprintf("pgflo.%s", r.Config.Group)
+	err = r.NATSClient.PublishMessage(ctx, subject, binaryData)
+	if err != nil {
+		r.Logger.Error().
+			Err(err).
+			Str("subject", subject).
+			Str("group", r.Config.Group).
+			Msg("Failed to publish message to NATS")
+		return err
+	}
+	return nil
 }
 
-// convertColumnValue converts the column value based on its data type
-func (r *BaseReplicator) convertColumnValue(dataType uint32, data []byte) interface{} {
-	switch dataType {
-	case uint32(pgtype.Int2OID), uint32(pgtype.Int4OID), uint32(pgtype.Int8OID):
-		val, _ := strconv.ParseInt(string(data), 10, 64)
-		return val
-	case uint32(pgtype.Float4OID), uint32(pgtype.Float8OID), uint32(pgtype.NumericOID):
-		return string(data)
-	case uint32(pgtype.BoolOID):
-		return string(data)
-	case uint32(pgtype.ByteaOID):
-		return base64.StdEncoding.EncodeToString(data)
-	case uint32(pgtype.TimestampOID), uint32(pgtype.TimestamptzOID):
-		t, err := utils.ParseTimestamp(string(data))
-		if err != nil {
-			r.Logger.Warn().Err(err).Msgf("Failed to parse timestamp: %s", string(data))
-			return string(data)
-		}
-		return t.Format(time.RFC3339Nano)
-	default:
-		return string(data)
+// AddPrimaryKeyInfo adds primary key information to the CDCMessage
+func (r *BaseReplicator) AddPrimaryKeyInfo(message *utils.CDCMessage, table string) {
+	if pkColumns, ok := r.TableDetails[table]; ok && len(pkColumns) > 0 {
+		message.PrimaryKeyColumn = pkColumns[0]
 	}
 }
 
@@ -499,23 +408,10 @@ func (r *BaseReplicator) SendStandbyStatusUpdate(ctx context.Context) error {
 	return nil
 }
 
-// sendFinalStandbyStatusUpdate sends a final status update before shutting down
-func (r *BaseReplicator) sendFinalStandbyStatusUpdate() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := r.SendStandbyStatusUpdate(ctx); err != nil {
-		return fmt.Errorf("failed to send standby status update: %w", err)
-	}
-
-	r.Logger.Info().Msg("Sent final standby status update")
-	return nil
-}
-
 // CreateReplicationSlot ensures that a replication slot exists, creating one if necessary
 func (r *BaseReplicator) CreateReplicationSlot(ctx context.Context) error {
 	publicationName := GeneratePublicationName(r.Config.Group)
-	exists, err := r.checkReplicationSlotExists(publicationName)
+	exists, err := r.CheckReplicationSlotExists(publicationName)
 	if err != nil {
 		return fmt.Errorf("failed to check replication slot: %w", err)
 	}
@@ -538,8 +434,8 @@ func (r *BaseReplicator) CreateReplicationSlot(ctx context.Context) error {
 	return nil
 }
 
-// checkReplicationSlotExists checks if a slot with the given name already exists
-func (r *BaseReplicator) checkReplicationSlotExists(slotName string) (bool, error) {
+// CheckReplicationSlotExists checks if a slot with the given name already exists
+func (r *BaseReplicator) CheckReplicationSlotExists(slotName string) (bool, error) {
 	var exists bool
 	err := r.StandardConn.QueryRow(context.Background(), "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", slotName).Scan(&exists)
 	if err != nil {
@@ -548,50 +444,40 @@ func (r *BaseReplicator) checkReplicationSlotExists(slotName string) (bool, erro
 	return exists, nil
 }
 
-func (r *BaseReplicator) gracefulShutdown() error {
+// GracefulShutdown performs a graceful shutdown of the replicator
+func (r *BaseReplicator) GracefulShutdown(ctx context.Context) error {
 	r.Logger.Info().Msg("Initiating graceful shutdown")
 
-	if err := r.FlushBuffer(); err != nil {
-		r.Logger.Error().Err(err).Msg("Failed to flush buffer during shutdown")
+	if err := r.SendStandbyStatusUpdate(ctx); err != nil {
+		r.Logger.Warn().Err(err).Msg("Failed to send final standby status update")
 	}
 
-	if err := r.sendFinalStandbyStatusUpdate(); err != nil {
-		r.Logger.Error().Err(err).Msg("Failed to send final standby status update")
+	if err := r.SaveState(ctx, r.LastLSN); err != nil {
+		r.Logger.Warn().Err(err).Msg("Failed to save final state")
 	}
 
-	if err := r.closeConnections(); err != nil {
-		r.Logger.Error().Err(err).Msg("Failed to close connections")
+	if err := r.closeConnections(ctx); err != nil {
+		r.Logger.Warn().Err(err).Msg("Failed to close connections")
 	}
 
-	r.Logger.Info().Msg("Graceful shutdown completed")
+	r.Logger.Info().Msg("Base replicator shutdown completed")
 	return nil
 }
 
-// closeConnections closes all open database connections.
-func (r *BaseReplicator) closeConnections() error {
-	if err := r.ReplicationConn.Close(context.Background()); err != nil {
+// closeConnections closes all open database connections
+func (r *BaseReplicator) closeConnections(ctx context.Context) error {
+	r.Logger.Info().Msg("Closing database connections")
+
+	if err := r.ReplicationConn.Close(ctx); err != nil {
 		return fmt.Errorf("failed to close replication connection: %w", err)
 	}
-	if err := r.StandardConn.Close(context.Background()); err != nil {
+	if err := r.StandardConn.Close(ctx); err != nil {
 		return fmt.Errorf("failed to close standard connection: %w", err)
 	}
 	return nil
 }
 
-// StartPeriodicFlush ensures any non flushed buffer is flushed every flushTimeout.
-func (r *BaseReplicator) StartPeriodicFlush() {
-	ticker := time.NewTicker(r.Buffer.flushTimeout)
-	go func() {
-		for range ticker.C {
-			if r.Buffer.shouldFlush() {
-				if err := r.FlushBuffer(); err != nil {
-					r.Logger.Err(err)
-				}
-			}
-		}
-	}()
-}
-
+// InitializePrimaryKeyInfo initializes primary key information for all tables
 func (r *BaseReplicator) InitializePrimaryKeyInfo() error {
 	for _, table := range r.Config.Tables {
 		column, err := r.getPrimaryKeyColumn(r.Config.Schema, table)
@@ -603,6 +489,7 @@ func (r *BaseReplicator) InitializePrimaryKeyInfo() error {
 	return nil
 }
 
+// getPrimaryKeyColumn retrieves the primary key column for a given table
 func (r *BaseReplicator) getPrimaryKeyColumn(schema, table string) (string, error) {
 	query := `
 		SELECT pg_attribute.attname
@@ -625,8 +512,35 @@ func (r *BaseReplicator) getPrimaryKeyColumn(schema, table string) (string, erro
 	return column, nil
 }
 
-func (r *BaseReplicator) addPrimaryKeyInfo(event map[string]interface{}, table string) {
-	if pkColumns, ok := r.TableDetails[table]; ok && len(pkColumns) > 0 {
-		event["primary_key_column"] = pkColumns[0]
+// SaveState saves the current replication state
+func (r *BaseReplicator) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
+	state, err := r.NATSClient.GetState(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current state: %w", err)
 	}
+	state.LSN = lsn
+	return r.NATSClient.SaveState(ctx, state)
+}
+
+// GetLastState retrieves the last saved replication state
+func (r *BaseReplicator) GetLastState(ctx context.Context) (pglogrepl.LSN, error) {
+	state, err := r.NATSClient.GetState(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get state: %w", err)
+	}
+	return state.LSN, nil
+}
+
+// CheckReplicationSlotStatus checks the status of the replication slot
+func (r *BaseReplicator) CheckReplicationSlotStatus(ctx context.Context) error {
+	publicationName := GeneratePublicationName(r.Config.Group)
+	var restartLSN string
+	err := r.StandardConn.QueryRow(ctx,
+		"SELECT restart_lsn FROM pg_replication_slots WHERE slot_name = $1",
+		publicationName).Scan(&restartLSN)
+	if err != nil {
+		return fmt.Errorf("failed to query replication slot status: %w", err)
+	}
+	r.Logger.Info().Str("slotName", publicationName).Str("restartLSN", restartLSN).Msg("Replication slot status")
+	return nil
 }

@@ -7,10 +7,10 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
-	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
@@ -26,78 +26,94 @@ type CopyAndStreamReplicator struct {
 	DDLReplicator          DDLReplicator
 }
 
-// CreatePublication creates a new publication for the specified tables.
-func (r *CopyAndStreamReplicator) CreatePublication() error {
-	return r.BaseReplicator.CreatePublication()
-}
-
 // StartReplication begins the replication process.
 func (r *CopyAndStreamReplicator) StartReplication() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go r.handleShutdownSignal(sigChan, cancel)
+	if err := r.BaseReplicator.CreatePublication(); err != nil {
+		return fmt.Errorf("failed to create publication: %v", err)
+	}
 
 	if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
 		return fmt.Errorf("failed to create replication slot: %v", err)
 	}
 
+	// Start DDL replication with its own cancellable context and wait group
+	var ddlWg sync.WaitGroup
 	var ddlCancel context.CancelFunc
 	if r.Config.TrackDDL {
 		if err := r.DDLReplicator.SetupDDLTracking(ctx); err != nil {
 			return fmt.Errorf("failed to set up DDL tracking: %v", err)
 		}
-		var ddlCtx context.Context
-		ddlCtx, ddlCancel = context.WithCancel(ctx)
-		go r.DDLReplicator.StartDDLReplication(ddlCtx)
+		ddlCtx, cancel := context.WithCancel(ctx)
+		ddlCancel = cancel
+		ddlWg.Add(1)
+		go func() {
+			defer ddlWg.Done()
+			r.DDLReplicator.StartDDLReplication(ddlCtx)
+		}()
 	}
-
 	defer func() {
 		if r.Config.TrackDDL {
 			ddlCancel()
-			if err := r.DDLReplicator.Shutdown(context.Background()); err != nil {
+			ddlWg.Wait()
+			if err := r.DDLReplicator.Shutdown(ctx); err != nil {
 				r.Logger.Error().Err(err).Msg("Failed to shutdown DDL replicator")
 			}
 		}
 	}()
 
-	startLSN, err := r.getStartLSN()
-	if err != nil {
-		return err
+	if copyErr := r.ParallelCopy(ctx); copyErr != nil {
+		return fmt.Errorf("failed to perform parallel copy: %v", copyErr)
 	}
+	startLSN := r.BaseReplicator.LastLSN
 
 	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Starting replication from LSN")
-	return r.BaseReplicator.StartReplicationFromLSN(ctx, startLSN)
-}
 
-// handleShutdownSignal waits for a shutdown signal and cancels the context.
-func (r *CopyAndStreamReplicator) handleShutdownSignal(sigChan <-chan os.Signal, cancel context.CancelFunc) {
-	sig := <-sigChan
-	r.Logger.Info().Str("signal", sig.String()).Msg("Received shutdown signal")
-	cancel()
-}
+	// Create a stop channel for graceful shutdown
+	stopChan := make(chan struct{})
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- r.BaseReplicator.StartReplicationFromLSN(ctx, startLSN, stopChan)
+	}()
 
-// getStartLSN determines the starting LSN for replication.
-func (r *CopyAndStreamReplicator) getStartLSN() (pglogrepl.LSN, error) {
-	r.Logger.Info().Msg("No valid LSN found in sink, starting initial copy")
-	if copyErr := r.ParallelCopy(context.Background()); copyErr != nil {
-		return 0, fmt.Errorf("failed to perform parallel copy: %v", copyErr)
+	select {
+	case <-sigChan:
+		r.Logger.Info().Msg("Received shutdown signal")
+		// Signal replication loop to stop
+		close(stopChan)
+		// Wait for replication loop to exit
+		<-errChan
+
+		// Signal DDL replication to stop and wait for it to finish
+		if r.Config.TrackDDL {
+			ddlCancel()
+			ddlWg.Wait()
+			if err := r.DDLReplicator.Shutdown(ctx); err != nil {
+				r.Logger.Error().Err(err).Msg("Failed to shutdown DDL replicator")
+			}
+		}
+
+		// Proceed with graceful shutdown
+		if err := r.BaseReplicator.GracefulShutdown(ctx); err != nil {
+			r.Logger.Error().Err(err).Msg("Error during graceful shutdown")
+			return err
+		}
+	case err := <-errChan:
+		if err != nil {
+			r.Logger.Error().Err(err).Msg("Replication ended with error")
+			return err
+		}
 	}
-	return r.BaseReplicator.LastLSN, nil
+
+	return nil
 }
 
 // ParallelCopy performs a parallel copy of all specified tables.
 func (r *CopyAndStreamReplicator) ParallelCopy(ctx context.Context) error {
-
-	for _, table := range r.Config.Tables {
-		if err := r.analyzeTable(ctx, table); err != nil {
-			return fmt.Errorf("failed to analyze table %s: %v", table, err)
-		}
-	}
-
 	tx, err := r.startSnapshotTransaction(ctx)
 	if err != nil {
 		return err
@@ -117,13 +133,6 @@ func (r *CopyAndStreamReplicator) ParallelCopy(ctx context.Context) error {
 	}
 
 	return tx.Commit(context.Background())
-}
-
-// analyzeTable runs ANALYZE on the specified table.
-func (r *CopyAndStreamReplicator) analyzeTable(ctx context.Context, tableName string) error {
-	r.Logger.Info().Str("table", tableName).Msg("Running ANALYZE on table")
-	_, err := r.BaseReplicator.StandardConn.Exec(ctx, fmt.Sprintf("ANALYZE %s", pgx.Identifier{tableName}.Sanitize()))
-	return err
 }
 
 // startSnapshotTransaction starts a new transaction with serializable isolation level.
@@ -214,7 +223,7 @@ func (r *CopyAndStreamReplicator) getRelPages(ctx context.Context, tableName str
 // generateRanges creates a set of page ranges for copying.
 func (r *CopyAndStreamReplicator) generateRanges(relPages uint32) [][2]uint32 {
 	var ranges [][2]uint32
-	batchSize := uint32(100)
+	batchSize := uint32(1000)
 	for start := uint32(0); start < relPages; start += batchSize {
 		end := start + batchSize
 		if end >= relPages {
@@ -310,7 +319,7 @@ func (r *CopyAndStreamReplicator) buildCopyQuery(tableName string, startPage, en
 	return query
 }
 
-// executeCopyQuery executes the copy query and writes the results to the sink.
+// executeCopyQuery executes the copy query and publishes the results to NATS.
 func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.Tx, query, schema, tableName string, startPage, endPage uint32, workerID int) (int64, error) {
 	r.Logger.Debug().Str("copyQuery", query).Int("workerID", workerID).Msg("Executing initial copy query")
 
@@ -321,9 +330,12 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 	defer rows.Close()
 
 	fieldDescriptions := rows.FieldDescriptions()
-	columnNames := make([]string, len(fieldDescriptions))
+	columns := make([]*pglogrepl.RelationMessageColumn, len(fieldDescriptions))
 	for i, fd := range fieldDescriptions {
-		columnNames[i] = fd.Name
+		columns[i] = &pglogrepl.RelationMessageColumn{
+			Name:     fd.Name,
+			DataType: fd.DataTypeOID,
+		}
 	}
 
 	var copyCount int64
@@ -333,35 +345,33 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 			return 0, fmt.Errorf("error reading row: %v", err)
 		}
 
-		newRow := make(map[string]utils.CDCValue)
-		for i, name := range columnNames {
-			newRow[name] = utils.CDCValue{
-				Type:  fieldDescriptions[i].DataTypeOID,
-				Value: values[i],
-			}
+		tupleData := &pglogrepl.TupleData{
+			Columns: make([]*pglogrepl.TupleDataColumn, len(values)),
 		}
-
-		// Apply rules if the rule engine is available
-		if r.BaseReplicator.RuleEngine != nil {
-			newRow, err = r.BaseReplicator.RuleEngine.ApplyRules(tableName, newRow, rules.OperationInsert)
+		for i, value := range values {
+			data, err := utils.ConvertToPgCompatibleOutput(value, fieldDescriptions[i].DataTypeOID)
 			if err != nil {
-				return 0, fmt.Errorf("failed to apply rules: %v", err)
+				return 0, fmt.Errorf("error converting value: %v", err)
 			}
-			if newRow == nil {
-				// Row filtered out by rules
-				continue
+
+			tupleData.Columns[i] = &pglogrepl.TupleDataColumn{
+				DataType: uint8(fieldDescriptions[i].DataTypeOID),
+				Data:     data,
 			}
 		}
 
-		insertEvent := map[string]interface{}{
-			"type":    "INSERT",
-			"schema":  schema,
-			"table":   tableName,
-			"new_row": newRow,
+		cdcMessage := utils.CDCMessage{
+			Type:      "INSERT",
+			Schema:    schema,
+			Table:     tableName,
+			Columns:   columns,
+			NewTuple:  tupleData,
+			EmittedAt: time.Now(),
 		}
-		r.BaseReplicator.addPrimaryKeyInfo(insertEvent, tableName)
-		if err := r.bufferWrite(insertEvent); err != nil {
-			return 0, fmt.Errorf("failed to write insert event to Buffer: %v", err)
+
+		r.BaseReplicator.AddPrimaryKeyInfo(&cdcMessage, tableName)
+		if err := r.BaseReplicator.PublishToNATS(ctx, cdcMessage); err != nil {
+			return 0, fmt.Errorf("failed to publish insert event to NATS: %v", err)
 		}
 
 		copyCount++
@@ -375,11 +385,6 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("error during row iteration: %v", err)
-	}
-
-	// Flush the buffer after processing all rows for this range
-	if err := r.FlushBuffer(); err != nil {
-		return 0, fmt.Errorf("failed to flush buffer after copying range: %v", err)
 	}
 
 	r.Logger.Info().Str("table", tableName).Int("start_page", int(startPage)).Int("end_page", int(endPage)).Int64("rows_copied", copyCount).Msg("Copied table range")
@@ -399,9 +404,4 @@ func (r *CopyAndStreamReplicator) collectErrors(errChan <-chan error) error {
 		return fmt.Errorf("multiple errors occurred: %v", errs)
 	}
 	return nil
-}
-
-// bufferWrite adds data to the buffer and flushes if necessary
-func (r *CopyAndStreamReplicator) bufferWrite(data interface{}) error {
-	return r.BaseReplicator.bufferWrite(data)
 }

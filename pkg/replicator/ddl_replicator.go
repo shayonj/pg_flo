@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"strings"
 	"time"
+
+	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgtype"
+	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 type DDLReplicator struct {
@@ -142,6 +146,27 @@ func (d *DDLReplicator) StartDDLReplication(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			d.BaseRepl.Logger.Info().Msg("Finishing processing of DDL events... (this can take a while)")
+
+			// Create a new context without cancellation to process remaining events
+			// Alternatively, when a shutdown is received we can trigger a ROLLBACK too ?
+			shutdownCtx := context.Background()
+
+			for {
+				hasEvents, err := d.HasPendingDDLEvents(shutdownCtx)
+				if err != nil {
+					d.BaseRepl.Logger.Error().Err(err).Msg("Failed to check for pending DDL events during shutdown")
+					break
+				}
+				if !hasEvents {
+					break
+				}
+				if err := d.ProcessDDLEvents(shutdownCtx); err != nil {
+					d.BaseRepl.Logger.Error().Err(err).Msg("Failed to process DDL events during shutdown")
+				}
+
+				time.Sleep(100 * time.Millisecond)
+			}
 			return
 		case <-ticker.C:
 			if err := d.ProcessDDLEvents(ctx); err != nil {
@@ -164,7 +189,6 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	var events []interface{}
 	var processedIDs []int
 	seenCommands := make(map[string]bool)
 
@@ -191,18 +215,34 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 			schema, table = "public", ""
 		}
 
-		event := map[string]interface{}{
-			"type":            "DDL",
-			"event_type":      eventType,
-			"object_type":     objectType,
-			"object_identity": objectIdentity,
-			"schema":          schema,
-			"table":           table,
-			"command":         ddlCommand,
-			"created_at":      createdAt.Format(time.RFC3339),
+		cdcMessage := utils.CDCMessage{
+			Type:      "DDL",
+			Schema:    schema,
+			Table:     table,
+			EmittedAt: time.Now(),
+			Columns: []*pglogrepl.RelationMessageColumn{
+				{Name: "event_type", DataType: pgtype.TextOID},
+				{Name: "object_type", DataType: pgtype.TextOID},
+				{Name: "object_identity", DataType: pgtype.TextOID},
+				{Name: "ddl_command", DataType: pgtype.TextOID},
+				{Name: "created_at", DataType: pgtype.TimestamptzOID},
+			},
+			NewTuple: &pglogrepl.TupleData{
+				Columns: []*pglogrepl.TupleDataColumn{
+					{Data: []byte(eventType)},
+					{Data: []byte(objectType)},
+					{Data: []byte(objectIdentity)},
+					{Data: []byte(ddlCommand)},
+					{Data: []byte(createdAt.Format(time.RFC3339))},
+				},
+			},
 		}
 
-		events = append(events, event)
+		if err := d.BaseRepl.PublishToNATS(ctx, cdcMessage); err != nil {
+			d.BaseRepl.Logger.Error().Err(err).Msg("Error during publishing DDL event to NATS")
+			return nil
+		}
+
 		processedIDs = append(processedIDs, id)
 	}
 
@@ -211,19 +251,7 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 		return nil
 	}
 
-	if len(events) > 0 {
-		for _, event := range events {
-			if err := d.BaseRepl.bufferWrite(event); err != nil {
-				d.BaseRepl.Logger.Error().Err(err).Msg("Error during writing DDL buffer")
-				return nil
-			}
-		}
-
-		if err := d.BaseRepl.FlushBuffer(); err != nil {
-			d.BaseRepl.Logger.Error().Err(err).Msg("Error during flushing DDL buffer")
-			return nil
-		}
-
+	if len(processedIDs) > 0 {
 		_, err = d.DDLConn.Exec(ctx, "DELETE FROM internal_pg_flo.ddl_log WHERE id = ANY($1)", processedIDs)
 		if err != nil {
 			d.BaseRepl.Logger.Error().Err(err).Msg("Failed to clear processed DDL events")
@@ -254,9 +282,24 @@ func (d *DDLReplicator) Close(ctx context.Context) error {
 // Shutdown performs a graceful shutdown of the DDL replicator
 func (d *DDLReplicator) Shutdown(ctx context.Context) error {
 	d.BaseRepl.Logger.Info().Msg("Shutting down DDL replicator")
+	if ctx.Err() != nil {
+		ctx = context.Background()
+	}
 	if err := d.ProcessDDLEvents(ctx); err != nil {
 		d.BaseRepl.Logger.Error().Err(err).Msg("Failed to process final DDL events")
 		return err
 	}
 	return d.Close(ctx)
+}
+
+// HasPendingDDLEvents checks if there are pending DDL events in the log
+func (d *DDLReplicator) HasPendingDDLEvents(ctx context.Context) (bool, error) {
+	var count int
+	err := d.DDLConn.QueryRow(ctx, `
+		SELECT COUNT(*) FROM internal_pg_flo.ddl_log
+	`).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

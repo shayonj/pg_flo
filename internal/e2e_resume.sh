@@ -17,7 +17,11 @@ create_users() {
 
 start_pg_flo_replication() {
   log "Starting pg_flo replication..."
-  $pg_flo_BIN stream file \
+  if [ -f "$pg_flo_LOG" ]; then
+    mv "$pg_flo_LOG" "${pg_flo_LOG}.bak"
+    log "Backed up previous replicator log to ${pg_flo_LOG}.bak"
+  fi
+  $pg_flo_BIN replicator \
     --host "$PG_HOST" \
     --port "$PG_PORT" \
     --dbname "$PG_DB" \
@@ -26,11 +30,27 @@ start_pg_flo_replication() {
     --group "group_resume" \
     --tables "users" \
     --schema "public" \
-    --status-dir "/tmp" \
-    --output-dir "$OUTPUT_DIR" >"$pg_flo_LOG" 2>&1 &
+    --nats-url "$NATS_URL" \
+    >"$pg_flo_LOG" 2>&1 &
   pg_flo_PID=$!
   log "pg_flo started with PID: $pg_flo_PID"
   success "pg_flo replication started"
+}
+
+start_pg_flo_worker() {
+  log "Starting pg_flo worker with file sink..."
+  if [ -f "$pg_flo_WORKER_LOG" ]; then
+    mv "$pg_flo_WORKER_LOG" "${pg_flo_WORKER_LOG}.bak"
+    log "Backed up previous worker log to ${pg_flo_WORKER_LOG}.bak"
+  fi
+  $pg_flo_BIN worker file \
+    --group "group_resume" \
+    --nats-url "$NATS_URL" \
+    --file-output-dir "$OUTPUT_DIR" \
+    >"$pg_flo_WORKER_LOG" 2>&1 &
+  pg_flo_WORKER_PID=$!
+  log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
+  success "pg_flo worker started"
 }
 
 simulate_concurrent_inserts() {
@@ -43,20 +63,14 @@ simulate_concurrent_inserts() {
 }
 
 interrupt_pg_flo() {
-  log "Interrupting pg_flo process..."
-  if kill -0 $pg_flo_PID 2>/dev/null; then
-    kill -15 $pg_flo_PID
-    wait $pg_flo_PID 2>/dev/null || true
-    success "pg_flo process interrupted"
-  else
-    log "pg_flo process not found, it may have already stopped"
-  fi
+  log "Interrupting pg_flo processes..."
+  stop_pg_flo_gracefully
 }
 
 verify_results() {
   log "Verifying results..."
   local db_count=$(run_sql "SELECT COUNT(*) FROM public.users")
-  local json_count=$(jq -s '[.[] | select(.type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
+  local json_count=$(jq -s '[.[] | select(.Type == "INSERT")] | length' "$OUTPUT_DIR"/*.jsonl)
 
   log "Database row count: $db_count"
   log "JSON INSERT count: $json_count"
@@ -66,6 +80,7 @@ verify_results() {
     return 0
   else
     error "Mismatch in insert counts. Expected $TOTAL_INSERTS, DB: $db_count, JSON: $json_count"
+    cat "$OUTPUT_DIR"/*
     return 1
   fi
 }
@@ -74,10 +89,11 @@ test_pg_flo_resume() {
   setup_postgres
   create_users
   start_pg_flo_replication
+  start_pg_flo_worker
 
   rm -f $INSERT_COMPLETE_FLAG
 
-  sleep 1
+  sleep 2
 
   simulate_concurrent_inserts &
   local insert_pid=$!
@@ -90,14 +106,12 @@ test_pg_flo_resume() {
   sleep $RESUME_WAIT_TIME
 
   start_pg_flo_replication
+  start_pg_flo_worker
 
   log "Waiting for inserts to complete..."
   while [ ! -f $INSERT_COMPLETE_FLAG ]; do
     sleep 1
   done
-
-  log "Inserts completed. Waiting for pg_flo to catch up..."
-  sleep 5
 
   stop_pg_flo_gracefully
 

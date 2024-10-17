@@ -35,6 +35,21 @@ services:
       - "5434:5432"
     restart: unless-stopped
 
+  nats:
+    image: nats:latest
+    container_name: pg_flo_nats
+    command:
+      - "-js"
+      - "-sd"
+      - "/data"
+    volumes:
+      - nats_data:/data
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   target_postgres_data:
+  nats_data:

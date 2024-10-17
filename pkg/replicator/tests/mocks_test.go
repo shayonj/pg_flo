@@ -7,9 +7,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/shayonj/pg_flo/pkg/pgflonats"
 	"github.com/shayonj/pg_flo/pkg/replicator"
-	"github.com/shayonj/pg_flo/pkg/rules"
-	"github.com/shayonj/pg_flo/pkg/utils"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -96,16 +96,6 @@ type MockSink struct {
 
 func (m *MockSink) WriteBatch(data []interface{}) error {
 	args := m.Called(data)
-	return args.Error(0)
-}
-
-func (m *MockSink) GetLastLSN() (pglogrepl.LSN, error) {
-	args := m.Called()
-	return args.Get(0).(pglogrepl.LSN), args.Error(1)
-}
-
-func (m *MockSink) SetLastLSN(lsn pglogrepl.LSN) error {
-	args := m.Called(lsn)
 	return args.Error(0)
 }
 
@@ -261,25 +251,37 @@ func (m *MockRows) Conn() *pgx.Conn {
 	return args.Get(0).(*pgx.Conn)
 }
 
-// Add this new mock implementation for RuleEngine
-type MockRuleEngine struct {
+// MockNATSClient mocks the NATSClient
+type MockNATSClient struct {
 	mock.Mock
 }
 
-func (m *MockRuleEngine) ApplyRules(tableName string, data map[string]utils.CDCValue, operation rules.OperationType) (map[string]utils.CDCValue, error) {
-	args := m.Called(tableName, data, operation)
-	result := args.Get(0)
-	if result == nil {
-		return nil, args.Error(1)
-	}
-	return result.(map[string]utils.CDCValue), args.Error(1)
-}
-
-func (m *MockRuleEngine) AddRule(tableName string, rule rules.Rule) {
-	m.Called(tableName, rule)
-}
-
-func (m *MockRuleEngine) LoadRules(config rules.Config) error {
-	args := m.Called(config)
+// PublishMessage mocks the PublishMessage method
+func (m *MockNATSClient) PublishMessage(ctx context.Context, subject string, data []byte) error {
+	args := m.Called(ctx, subject, data)
 	return args.Error(0)
+}
+
+// Close mocks the Close method
+func (m *MockNATSClient) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// SaveState mocks the SaveState method
+func (m *MockNATSClient) SaveState(ctx context.Context, state pgflonats.State) error {
+	args := m.Called(ctx, state)
+	return args.Error(0)
+}
+
+// GetState mocks the GetState method
+func (m *MockNATSClient) GetState(ctx context.Context) (pgflonats.State, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(pgflonats.State), args.Error(1)
+}
+
+// JetStream mocks the JetStream method
+func (m *MockNATSClient) JetStream() jetstream.JetStream {
+	args := m.Called()
+	return args.Get(0).(jetstream.JetStream)
 }

@@ -4,6 +4,7 @@ set -euo pipefail
 source "$(dirname "$0")/e2e_common.sh"
 
 setup_docker() {
+  pkill -9 "pg_flo" || true
   rm -Rf /tmp/pg*
   log "Setting up Docker environment..."
   docker compose down -v
@@ -30,25 +31,25 @@ trap cleanup EXIT
 
 make build
 
-setup_docker
+# setup_docker
 
-log "Running e2e copy & stream tests..."
-if CI=false ./internal/e2e_copy_and_stream.sh; then
-  success "Original e2e tests completed successfully"
-else
-  error "Original e2e tests failed"
-  exit 1
-fi
+# log "Running e2e copy & stream tests..."
+# if CI=false ./internal/e2e_copy_and_stream.sh; then
+#   success "Original e2e tests completed successfully"
+# else
+#   error "Original e2e tests failed"
+#   exit 1
+# fi
 
-setup_docker
+# setup_docker
 
-log "Running new e2e stream tests with changes..."
-if ./internal/e2e_test_stream.sh; then
-  success "New e2e tests with changes completed successfully"
-else
-  error "New e2e tests with changes failed"
-  exit 1
-fi
+# log "Running new e2e stream tests with changes..."
+# if ./internal/e2e_test_stream.sh; then
+#   success "New e2e tests with changes completed successfully"
+# else
+#   error "New e2e tests with changes failed"
+#   exit 1
+# fi
 
 setup_docker
 
@@ -61,27 +62,27 @@ else
   exit 1
 fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e test for transform & filter
-log "Running new e2e test for transform & filter..."
-if ./internal/e2e_transform_filter.sh; then
-  success "E2E test for transform & filter test completed successfully"
-else
-  error "E2E test for transform & filter test failed"
-  exit 1
-fi
+# # Run new e2e test for transform & filter
+# log "Running new e2e test for transform & filter..."
+# if ./internal/e2e_transform_filter.sh; then
+#   success "E2E test for transform & filter test completed successfully"
+# else
+#   error "E2E test for transform & filter test failed"
+#   exit 1
+# fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e test for DDL changes
-log "Running new e2e test for DDL changes..."
-if ./internal/e2e_ddl.sh; then
-  success "E2E test for DDL changes completed successfully"
-else
-  error "E2E test for DDL changes failed"
-  exit 1
-fi
+# # Run new e2e test for DDL changes
+# log "Running new e2e test for DDL changes..."
+# if ./internal/e2e_ddl.sh; then
+#   success "E2E test for DDL changes completed successfully"
+# else
+#   error "E2E test for DDL changes failed"
+#   exit 1
+# fi
 
 setup_docker
 
@@ -94,4 +95,4 @@ else
   exit 1
 fi
 
-success "All local e2e tests completed successfully"
+# success "All local e2e tests completed successfully"

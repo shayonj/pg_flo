@@ -1,16 +1,21 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/shayonj/pg_flo/pkg/pgflonats"
 	"github.com/shayonj/pg_flo/pkg/replicator"
 	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/sinks"
+	"github.com/shayonj/pg_flo/pkg/worker"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
 )
@@ -22,16 +27,41 @@ var (
 		Short: "The easiest way to move and transform data from PostgreSQL",
 	}
 
-	streamCmd = &cobra.Command{
-		Use:   "stream",
-		Short: "Start streaming changes",
-		Long:  `Stream inserts, updates, and deletes from PostgreSQL tables to a sink`,
+	replicatorCmd = &cobra.Command{
+		Use:   "replicator",
+		Short: "Start the replicator",
+		Long:  `Start the replicator to capture changes from PostgreSQL and publish to NATS`,
+		Run:   runReplicator,
 	}
 
-	copyAndStreamCmd = &cobra.Command{
-		Use:   "copy-and-stream",
-		Short: "Start copy and stream operation",
-		Long:  `Copy existing data and stream changes from PostgreSQL tables to a sink`,
+	workerCmd = &cobra.Command{
+		Use:   "worker",
+		Short: "Start the worker",
+		Long:  `Start the worker to process messages from NATS, apply rules, and write to sinks`,
+	}
+
+	stdoutWorkerCmd = &cobra.Command{
+		Use:   "stdout",
+		Short: "Start the worker with stdout sink",
+		Run:   runWorker,
+	}
+
+	fileWorkerCmd = &cobra.Command{
+		Use:   "file",
+		Short: "Start the worker with file sink",
+		Run:   runWorker,
+	}
+
+	postgresWorkerCmd = &cobra.Command{
+		Use:   "postgres",
+		Short: "Start the worker with postgres sink",
+		Run:   runWorker,
+	}
+
+	webhookWorkerCmd = &cobra.Command{
+		Use:   "webhook",
+		Short: "Start the worker with webhook sink",
+		Run:   runWorker,
 	}
 )
 
@@ -42,81 +72,65 @@ func Execute() error {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.pg_flo.yaml)")
 
-	commonFlags := func(cmd *cobra.Command) {
-		cmd.Flags().String("host", "", "PostgreSQL host")
-		cmd.Flags().Int("port", 5432, "PostgreSQL port")
-		cmd.Flags().String("dbname", "", "PostgreSQL database name")
-		cmd.Flags().String("user", "", "PostgreSQL user")
-		cmd.Flags().String("password", "", "PostgreSQL password")
-		cmd.Flags().String("group", "", "Group name for replication")
-		cmd.Flags().String("schema", "public", "PostgreSQL schema")
-		cmd.Flags().StringSlice("tables", []string{}, "Tables to replicate")
-		cmd.Flags().String("status-dir", "/tmp", "Directory to store status files")
-		cmd.Flags().String("rules-config", "", "Path to rules configuration file")
-		cmd.Flags().Bool("track-ddl", false, "Enable DDL tracking")
-	}
+	// Replicator flags
+	replicatorCmd.Flags().String("host", "", "PostgreSQL host (env: PG_FLO_HOST)")
+	replicatorCmd.Flags().Int("port", 5432, "PostgreSQL port (env: PG_FLO_PORT)")
+	replicatorCmd.Flags().String("dbname", "", "PostgreSQL database name (env: PG_FLO_DBNAME)")
+	replicatorCmd.Flags().String("user", "", "PostgreSQL user (env: PG_FLO_USER)")
+	replicatorCmd.Flags().String("password", "", "PostgreSQL password (env: PG_FLO_PASSWORD)")
+	replicatorCmd.Flags().String("group", "", "Group name for replication (env: PG_FLO_GROUP)")
+	replicatorCmd.Flags().String("schema", "public", "PostgreSQL schema (env: PG_FLO_SCHEMA)")
+	replicatorCmd.Flags().StringSlice("tables", []string{}, "Tables to replicate (env: PG_FLO_TABLES)")
+	replicatorCmd.Flags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
+	replicatorCmd.Flags().Bool("copy-and-stream", false, "Enable copy and stream mode (env: PG_FLO_COPY_AND_STREAM)")
+	replicatorCmd.Flags().Int("max-copy-workers-per-table", 4, "Maximum number of copy workers per table (env: PG_FLO_MAX_COPY_WORKERS_PER_TABLE)")
+	replicatorCmd.Flags().Bool("track-ddl", false, "Enable tracking of DDL changes (env: PG_FLO_TRACK_DDL)")
 
-	addSinkCommands := func(parentCmd *cobra.Command, isCopyAndStream bool) {
-		stdoutCmd := &cobra.Command{
-			Use:   "stdout",
-			Short: "Sync changes to STDOUT",
-			Run:   createRunFunc("stdout", isCopyAndStream),
-		}
-		commonFlags(stdoutCmd)
-		if isCopyAndStream {
-			stdoutCmd.Flags().Int("max-copy-workers", 4, "Maximum number of parallel workers for copy operation")
-		}
+	markFlagRequired(replicatorCmd, "host", "port", "dbname", "user", "password", "group", "nats-url")
 
-		fileCmd := &cobra.Command{
-			Use:   "file",
-			Short: "Sync changes to file (rotated by size)",
-			Run:   createRunFunc("file", isCopyAndStream),
-		}
-		commonFlags(fileCmd)
-		fileCmd.Flags().String("output-dir", "/tmp", "Output directory for file sink")
-		if isCopyAndStream {
-			fileCmd.Flags().Int("max-copy-workers", 4, "Maximum number of parallel workers for copy operation")
-		}
+	// Worker flags
+	workerCmd.PersistentFlags().String("group", "", "Group name for worker (env: PG_FLO_GROUP)")
+	workerCmd.PersistentFlags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
+	workerCmd.PersistentFlags().String("rules-config", "", "Path to rules configuration file (env: PG_FLO_RULES_CONFIG)")
 
-		postgresCmd := &cobra.Command{
-			Use:   "postgres",
-			Short: "Sync changes to another PostgreSQL database",
-			Run:   createRunFunc("postgres", isCopyAndStream),
-		}
-		commonFlags(postgresCmd)
-		postgresCmd.Flags().String("target-host", "", "Target PostgreSQL host")
-		postgresCmd.Flags().Int("target-port", 5432, "Target PostgreSQL port")
-		postgresCmd.Flags().String("target-dbname", "", "Target PostgreSQL database name")
-		postgresCmd.Flags().String("target-user", "", "Target PostgreSQL user")
-		postgresCmd.Flags().String("target-password", "", "Target PostgreSQL password")
-		postgresCmd.Flags().Bool("sync-schema", false, "Sync schema from source to target")
-		if isCopyAndStream {
-			postgresCmd.Flags().Int("max-copy-workers", 4, "Maximum number of parallel workers for copy operation")
-		}
+	markPersistentFlagRequired(workerCmd, "group", "nats-url")
 
-		webhookCmd := &cobra.Command{
-			Use:   "webhook",
-			Short: "Sync changes to another Webhook",
-			Run:   createRunFunc("webhook", isCopyAndStream),
-		}
-		commonFlags(webhookCmd)
-		webhookCmd.Flags().String("webhook-url", "", "Webhook URL to send data")
-		if isCopyAndStream {
-			webhookCmd.Flags().Int("max-copy-workers", 4, "Maximum number of parallel workers for copy operation")
-		}
+	// Stdout sink flags
+	stdoutWorkerCmd.Flags().String("stdout-format", "json", "Output format for stdout sink (json or csv) (env: PG_FLO_STDOUT_FORMAT)")
 
-		parentCmd.AddCommand(stdoutCmd, fileCmd, postgresCmd, webhookCmd)
-	}
+	// File sink flags
+	fileWorkerCmd.Flags().String("file-output-dir", "/tmp", "Output directory for file sink (env: PG_FLO_FILE_OUTPUT_DIR)")
 
-	addSinkCommands(streamCmd, false)
-	addSinkCommands(copyAndStreamCmd, true)
+	// Postgres sink flags
+	postgresWorkerCmd.Flags().String("target-host", "", "Target PostgreSQL host (env: PG_FLO_TARGET_HOST)")
+	postgresWorkerCmd.Flags().Int("target-port", 5432, "Target PostgreSQL port (env: PG_FLO_TARGET_PORT)")
+	postgresWorkerCmd.Flags().String("target-dbname", "", "Target PostgreSQL database name (env: PG_FLO_TARGET_DBNAME)")
+	postgresWorkerCmd.Flags().String("target-user", "", "Target PostgreSQL user (env: PG_FLO_TARGET_USER)")
+	postgresWorkerCmd.Flags().String("target-password", "", "Target PostgreSQL password (env: PG_FLO_TARGET_PASSWORD)")
+	postgresWorkerCmd.Flags().Bool("target-sync-schema", false, "Sync schema from source to target (env: PG_FLO_TARGET_SYNC_SCHEMA)")
+	postgresWorkerCmd.Flags().Bool("target-disable-foreign-keys", false, "Disable foreign key checks during write (env: PG_FLO_TARGET_DISABLE_FOREIGN_KEYS)")
 
-	rootCmd.AddCommand(streamCmd, copyAndStreamCmd)
+	postgresWorkerCmd.Flags().String("source-host", "", "Source PostgreSQL host (env: PG_FLO_SOURCE_HOST)")
+	postgresWorkerCmd.Flags().Int("source-port", 5432, "Source PostgreSQL port (env: PG_FLO_SOURCE_PORT)")
+	postgresWorkerCmd.Flags().String("source-dbname", "", "Source PostgreSQL database name (env: PG_FLO_SOURCE_DBNAME)")
+	postgresWorkerCmd.Flags().String("source-user", "", "Source PostgreSQL user (env: PG_FLO_SOURCE_USER)")
+	postgresWorkerCmd.Flags().String("source-password", "", "Source PostgreSQL password (env: PG_FLO_SOURCE_PASSWORD)")
+
+	markFlagRequired(postgresWorkerCmd, "target-host", "target-dbname", "target-user", "target-password")
+
+	// Webhook sink flags
+	webhookWorkerCmd.Flags().String("webhook-url", "", "Webhook URL to send data (env: PG_FLO_WEBHOOK_URL)")
+	webhookWorkerCmd.Flags().Int("webhook-batch-size", 100, "Number of messages to batch before sending (env: PG_FLO_WEBHOOK_BATCH_SIZE)")
+	webhookWorkerCmd.Flags().Int("webhook-retry-max", 3, "Maximum number of retries for failed requests (env: PG_FLO_WEBHOOK_RETRY_MAX)")
+
+	markFlagRequired(webhookWorkerCmd, "webhook-url")
+
+	// Add subcommands to worker command
+	workerCmd.AddCommand(stdoutWorkerCmd, fileWorkerCmd, postgresWorkerCmd, webhookWorkerCmd)
+
+	rootCmd.AddCommand(replicatorCmd, workerCmd)
 }
 
 func initConfig() {
@@ -127,185 +141,186 @@ func initConfig() {
 		cobra.CheckErr(err)
 
 		viper.AddConfigPath(home)
-		viper.AddConfigPath(".")
 		viper.SetConfigType("yaml")
 		viper.SetConfigName(".pg_flo")
 	}
 
 	viper.AutomaticEnv()
-	viper.SetEnvPrefix("PG")
+	viper.SetEnvPrefix("PG_FLO")
 
-	viper.SetDefault("status-dir", "/tmp/")
-	viper.SetDefault("host", "")
-	viper.SetDefault("port", 5432)
-	viper.SetDefault("dbname", "")
-	viper.SetDefault("user", "")
-	viper.SetDefault("password", "")
-	viper.SetDefault("group", "")
-	viper.SetDefault("schema", "public")
-	viper.SetDefault("tables", []string{})
-	viper.SetDefault("rules-config", "")
-	viper.SetDefault("track-ddl", false)
-	viper.SetDefault("webhook-url", "")
+	bindFlags(replicatorCmd)
+	bindFlags(workerCmd)
+	bindFlags(stdoutWorkerCmd)
+	bindFlags(fileWorkerCmd)
+	bindFlags(postgresWorkerCmd)
+	bindFlags(webhookWorkerCmd)
 
 	if err := viper.ReadInConfig(); err == nil {
-		log.Info().Str("config_file", viper.ConfigFileUsed()).Msg("Using config file")
-	} else {
-		log.Warn().Msg("No config file found, using default or environment variables")
+		fmt.Println("Using config file:", viper.ConfigFileUsed())
 	}
 }
 
-func createRunFunc(sinkType string, isCopyAndStream bool) func(*cobra.Command, []string) {
-	return func(cmd *cobra.Command, _ []string) {
-		config := createReplicatorConfig(cmd)
-		sink := createSink(cmd, sinkType)
-		ruleEngine := createRuleEngine(cmd)
-
-		maxCopyWorkers := 0
-		if isCopyAndStream {
-			maxCopyWorkers = getIntValue(cmd, "max-copy-workers")
+func bindFlags(cmd *cobra.Command) {
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if err := viper.BindEnv(f.Name, fmt.Sprintf("PG_FLO_%s", strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_")))); err != nil {
+			fmt.Printf("Error binding flag %s to env var: %v\n", f.Name, err)
 		}
-
-		r, err := replicator.NewReplicator(config, sink, isCopyAndStream, maxCopyWorkers, ruleEngine)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to create replicator")
-			os.Exit(1)
+		if err := viper.BindPFlag(f.Name, f); err != nil {
+			fmt.Printf("Error binding flag %s: %v\n", f.Name, err)
 		}
-
-		err = r.CreatePublication()
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to create publication")
-			os.Exit(1)
-		}
-
-		err = r.StartReplication()
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to start replication")
-			os.Exit(1)
-		}
-	}
+	})
 }
 
-func createReplicatorConfig(cmd *cobra.Command) replicator.Config {
-	return replicator.Config{
-		Host:     getStringValue(cmd, "host"),
-		Port:     uint16(getIntValue(cmd, "port")),
-		Database: getStringValue(cmd, "dbname"),
-		User:     getStringValue(cmd, "user"),
-		Password: getStringValue(cmd, "password"),
-		Group:    getStringValue(cmd, "group"),
-		Schema:   getStringValue(cmd, "schema"),
-		Tables:   getStringSliceValue(cmd, "tables"),
-		TrackDDL: getBoolValue(cmd, "track-ddl"),
-	}
-}
-
-func createSink(cmd *cobra.Command, sinkType string) sinks.Sink {
-	statusDir := getStringValue(cmd, "status-dir")
-	outputDir := getStringValue(cmd, "output-dir")
-
-	var sink sinks.Sink
-	var err error
-
-	switch sinkType {
-	case "stdout":
-		sink, err = sinks.NewStdoutSink(statusDir)
-	case "file":
-		sink, err = sinks.NewFileSink(statusDir, outputDir)
-	case "postgres":
-		targetHost := getStringValue(cmd, "target-host")
-		targetPort := getIntValue(cmd, "target-port")
-		targetDBName := getStringValue(cmd, "target-dbname")
-		targetUser := getStringValue(cmd, "target-user")
-		targetPassword := getStringValue(cmd, "target-password")
-		syncSchema := getBoolValue(cmd, "sync-schema")
-		sourceHost := getStringValue(cmd, "host")
-		sourcePort := getIntValue(cmd, "port")
-		sourceDBName := getStringValue(cmd, "dbname")
-		sourceUser := getStringValue(cmd, "user")
-		sourcePassword := getStringValue(cmd, "password")
-		sink, err = sinks.NewPostgresSink(targetHost, targetPort, targetDBName, targetUser, targetPassword, syncSchema, sourceHost, sourcePort, sourceDBName, sourceUser, sourcePassword)
-	case "webhook":
-		webhookURL := getStringValue(cmd, "webhook-url")
-		sink, err = sinks.NewWebhookSink(statusDir, webhookURL)
-	default:
-		log.Error().Str("sink", sinkType).Msg("Invalid sink type")
-		os.Exit(1)
+func runReplicator(_ *cobra.Command, _ []string) {
+	config := replicator.Config{
+		Host:     viper.GetString("host"),
+		Port:     uint16(viper.GetInt("port")),
+		Database: viper.GetString("dbname"),
+		User:     viper.GetString("user"),
+		Password: viper.GetString("password"),
+		Group:    viper.GetString("group"),
+		Schema:   viper.GetString("schema"),
+		Tables:   viper.GetStringSlice("tables"),
+		TrackDDL: viper.GetBool("track-ddl"),
 	}
 
+	natsURL := viper.GetString("nats-url")
+	if natsURL == "" {
+		log.Fatal().Msg("NATS URL is required")
+	}
+
+	natsClient, err := pgflonats.NewNATSClient(natsURL, fmt.Sprintf("pgflo_%s_stream", config.Group), config.Group)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to create sink")
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("Failed to create NATS client")
 	}
 
-	return sink
+	copyAndStream := viper.GetBool("copy-and-stream")
+	maxCopyWorkersPerTable := viper.GetInt("max-copy-workers-per-table")
+
+	rep, err := replicator.NewReplicator(config, natsClient, copyAndStream, maxCopyWorkersPerTable)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create replicator")
+	}
+
+	if err := rep.StartReplication(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to start replication")
+	}
 }
 
-func createRuleEngine(cmd *cobra.Command) *rules.RuleEngine {
-	rulesConfigPath := getStringValue(cmd, "rules-config")
-	if rulesConfigPath == "" {
-		return nil
+func runWorker(cmd *cobra.Command, _ []string) {
+	group := viper.GetString("group")
+	natsURL := viper.GetString("nats-url")
+	if natsURL == "" {
+		log.Fatal().Msg("NATS URL is required")
 	}
 
-	config, err := loadRulesConfig(rulesConfigPath)
+	rulesConfigPath := viper.GetString("rules-config")
+	sinkType := cmd.Use
+
+	// Create NATS client
+	natsClient, err := pgflonats.NewNATSClient(natsURL, fmt.Sprintf("pgflo_%s_stream", group), group)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to load rules configuration")
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("Failed to create NATS client")
 	}
 
 	ruleEngine := rules.NewRuleEngine()
-	if err := ruleEngine.LoadRules(config); err != nil {
-		log.Error().Err(err).Msg("Failed to load rules")
-		os.Exit(1)
+	if rulesConfigPath != "" {
+		rulesConfig, err := loadRulesConfig(rulesConfigPath)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to load rules configuration")
+		}
+		if err := ruleEngine.LoadRules(rulesConfig); err != nil {
+			log.Fatal().Err(err).Msg("Failed to load rules")
+		}
 	}
 
-	return ruleEngine
+	sink, err := createSink(sinkType)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create sink")
+	}
+
+	w := worker.NewWorker(natsClient, ruleEngine, sink, group)
+
+	ctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigCh
+		cancel()
+	}()
+
+	log.Info().Msg("Starting worker...")
+	if err := w.Start(ctx); err != nil {
+		if err == context.Canceled {
+			log.Info().Msg("Worker shut down gracefully")
+		} else {
+			log.Error().Err(err).Msg("Worker encountered an error during shutdown")
+		}
+	}
 }
 
 func loadRulesConfig(filePath string) (rules.Config, error) {
 	var config rules.Config
-
-	data, err := ioutil.ReadFile(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return config, fmt.Errorf("failed to read config file: %w", err)
 	}
-
 	err = yaml.Unmarshal(data, &config)
 	if err != nil {
 		return config, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-
 	return config, nil
 }
 
-func getStringValue(cmd *cobra.Command, key string) string {
-	if cmd.Flags().Changed(key) {
-		val, _ := cmd.Flags().GetString(key)
-		return val
+func createSink(sinkType string) (sinks.Sink, error) {
+	switch sinkType {
+	case "stdout":
+		return sinks.NewStdoutSink()
+	case "file":
+		return sinks.NewFileSink(
+			viper.GetString("file-output-dir"),
+		)
+	case "postgres":
+		return sinks.NewPostgresSink(
+			viper.GetString("target-host"),
+			viper.GetInt("target-port"),
+			viper.GetString("target-dbname"),
+			viper.GetString("target-user"),
+			viper.GetString("target-password"),
+			viper.GetBool("target-sync-schema"),
+			viper.GetString("source-host"),
+			viper.GetInt("source-port"),
+			viper.GetString("source-dbname"),
+			viper.GetString("source-user"),
+			viper.GetString("source-password"),
+			viper.GetBool("target-disable-foreign-keys"),
+		)
+	case "webhook":
+		return sinks.NewWebhookSink(
+			viper.GetString("webhook-url"),
+		)
+	default:
+		return nil, fmt.Errorf("unknown sink type: %s", sinkType)
 	}
-	return viper.GetString(key)
 }
 
-func getIntValue(cmd *cobra.Command, key string) int {
-	if cmd.Flags().Changed(key) {
-		val, _ := cmd.Flags().GetInt(key)
-		return val
+// Helper function to mark multiple flags as required
+func markFlagRequired(cmd *cobra.Command, flags ...string) {
+	for _, flag := range flags {
+		if err := cmd.MarkFlagRequired(flag); err != nil {
+			fmt.Printf("Error marking flag %s as required: %v\n", flag, err)
+		}
 	}
-	return viper.GetInt(key)
 }
 
-func getBoolValue(cmd *cobra.Command, key string) bool {
-	if cmd.Flags().Changed(key) {
-		val, _ := cmd.Flags().GetBool(key)
-		return val
+// Helper function to mark multiple persistent flags as required
+func markPersistentFlagRequired(cmd *cobra.Command, flags ...string) {
+	for _, flag := range flags {
+		if err := cmd.MarkPersistentFlagRequired(flag); err != nil {
+			fmt.Printf("Error marking persistent flag %s as required: %v\n", flag, err)
+		}
 	}
-	return viper.GetBool(key)
-}
-
-func getStringSliceValue(cmd *cobra.Command, key string) []string {
-	if cmd.Flags().Changed(key) {
-		val, _ := cmd.Flags().GetStringSlice(key)
-		return val
-	}
-	return viper.GetStringSlice(key)
 }

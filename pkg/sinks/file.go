@@ -8,16 +8,14 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/shayonj/pg_flo/pkg/utils"
 
-	"github.com/jackc/pglogrepl"
 	"github.com/rs/zerolog/log"
 )
 
+// FileSink represents a sink that writes data to files
 type FileSink struct {
-	lastLSN        pglogrepl.LSN
-	statusDir      string
 	outputDir      string
-	lsnFile        string
 	currentFile    *os.File
 	currentSize    int64
 	maxFileSize    int64
@@ -26,25 +24,16 @@ type FileSink struct {
 	mutex          sync.Mutex
 }
 
-func NewFileSink(statusDir, outputDir string) (*FileSink, error) {
+// NewFileSink creates a new FileSink instance
+func NewFileSink(outputDir string) (*FileSink, error) {
 	sink := &FileSink{
-		statusDir:      statusDir,
 		outputDir:      outputDir,
-		lsnFile:        filepath.Join(statusDir, "pg_flo_file_last_lsn.json"),
 		maxFileSize:    100 * 1024 * 1024, // 100 MB
 		rotateInterval: time.Hour,         // Rotate every hour if size limit not reached
 	}
 
-	if err := os.MkdirAll(statusDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create status directory: %v", err)
-	}
-
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create output directory: %v", err)
-	}
-
-	if err := sink.loadStatus(); err != nil {
-		log.Warn().Err(err).Msg("Failed to load status, starting from scratch")
 	}
 
 	if err := sink.rotateFile(); err != nil {
@@ -54,6 +43,7 @@ func NewFileSink(statusDir, outputDir string) (*FileSink, error) {
 	return sink, nil
 }
 
+// rotateFile creates a new log file and updates the current file pointer
 func (s *FileSink) rotateFile() error {
 	if s.currentFile != nil {
 		err := s.currentFile.Close()
@@ -80,12 +70,18 @@ func (s *FileSink) rotateFile() error {
 	return nil
 }
 
-func (s *FileSink) WriteBatch(data []interface{}) error {
+// WriteBatch writes a batch of data to the current log file
+func (s *FileSink) WriteBatch(messages []*utils.CDCMessage) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	for _, item := range data {
-		jsonData, err := json.Marshal(item)
+	for _, message := range messages {
+		decodedMessage, err := message.GetDecodedMessage()
+		if err != nil {
+			return fmt.Errorf("failed to get decoded message: %v", err)
+		}
+
+		jsonData, err := json.Marshal(decodedMessage)
 		if err != nil {
 			return fmt.Errorf("failed to marshal data to JSON: %v", err)
 		}
@@ -108,51 +104,7 @@ func (s *FileSink) WriteBatch(data []interface{}) error {
 	return nil
 }
 
-func (s *FileSink) loadStatus() error {
-	data, err := os.ReadFile(s.lsnFile)
-	if os.IsNotExist(err) {
-		log.Info().Msg("No existing LSN file found, starting from scratch")
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("failed to read LSN file: %v", err)
-	}
-
-	var status Status
-	if err := json.Unmarshal(data, &status); err != nil {
-		return fmt.Errorf("failed to unmarshal status: %v", err)
-	}
-
-	s.lastLSN = status.LastLSN
-	log.Info().Str("lsn", s.lastLSN.String()).Msg("Loaded last LSN from file")
-	return nil
-}
-
-func (s *FileSink) saveStatus() error {
-	status := Status{
-		LastLSN: s.lastLSN,
-	}
-
-	data, err := json.Marshal(status)
-	if err != nil {
-		return fmt.Errorf("failed to marshal status: %v", err)
-	}
-
-	if err := os.WriteFile(s.lsnFile, data, 0600); err != nil {
-		return fmt.Errorf("failed to write status file: %v", err)
-	}
-
-	return nil
-}
-
-func (s *FileSink) GetLastLSN() (pglogrepl.LSN, error) {
-	return s.lastLSN, nil
-}
-
-func (s *FileSink) SetLastLSN(lsn pglogrepl.LSN) error {
-	s.lastLSN = lsn
-	return s.saveStatus()
-}
-
+// Close closes the current log file and performs any necessary cleanup
 func (s *FileSink) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

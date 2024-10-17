@@ -55,7 +55,7 @@ func TestDDLReplicator(t *testing.T) {
 	t.Run("StartDDLReplication", func(t *testing.T) {
 		mockStandardConn := &MockStandardConnection{}
 		mockBaseReplicator := &replicator.BaseReplicator{
-			Logger: zerolog.Logger{},
+			Logger: zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger(),
 		}
 		ddlReplicator := &replicator.DDLReplicator{
 			DDLConn:  mockStandardConn,
@@ -84,13 +84,28 @@ func TestDDLReplicator(t *testing.T) {
 			return true
 		}), mock.Anything).Return(mockRows, nil)
 
+		mockStandardConn.On("QueryRow", mock.Anything, mock.MatchedBy(func(sql string) bool {
+			return strings.Contains(sql, "SELECT COUNT(*) FROM internal_pg_flo.ddl_log")
+		}), mock.Anything).Return(&MockRow{
+			scanFunc: func(dest ...interface{}) error {
+				*dest[0].(*int) = 1
+				return nil
+			},
+		})
+
 		go ddlReplicator.StartDDLReplication(ctx)
 
-		// Wait for the goroutine to run once
-		time.Sleep(1500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
+
+		hasPending, err := ddlReplicator.HasPendingDDLEvents(ctx)
+		assert.NoError(t, err)
+		assert.True(t, hasPending)
+
+		cancel()
+
+		time.Sleep(100 * time.Millisecond)
 
 		mockStandardConn.AssertExpectations(t)
 		mockRows.AssertExpectations(t)
 	})
-
 }

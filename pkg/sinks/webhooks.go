@@ -4,80 +4,37 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"github.com/goccy/go-json"
-	"github.com/jackc/pglogrepl"
 	"github.com/rs/zerolog/log"
+	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
+// WebhookSink represents a sink that sends data to a webhook endpoint
 type WebhookSink struct {
-	lastLSN    pglogrepl.LSN
-	statusDir  string
-	lsnFile    string
 	webhookURL string
 	client     *http.Client
 }
 
-func NewWebhookSink(statusDir, webhookURL string) (*WebhookSink, error) {
+// NewWebhookSink creates a new WebhookSink instance
+func NewWebhookSink(webhookURL string) (*WebhookSink, error) {
 	sink := &WebhookSink{
-		statusDir:  statusDir,
-		lsnFile:    filepath.Join(statusDir, "pg_flo_webhook_last_lsn.json"),
 		webhookURL: webhookURL,
 		client:     &http.Client{},
-	}
-
-	if err := os.MkdirAll(statusDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create status directory: %v", err)
-	}
-
-	if err := sink.loadStatus(); err != nil {
-		log.Warn().Err(err).Msg("Failed to load status, starting from scratch")
 	}
 
 	return sink, nil
 }
 
-func (s *WebhookSink) loadStatus() error {
-	data, err := os.ReadFile(s.lsnFile)
-	if os.IsNotExist(err) {
-		log.Info().Msg("No existing LSN file found, starting from scratch")
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("failed to read LSN file: %v", err)
-	}
+// WriteBatch sends a batch of data to the webhook endpoint
+func (s *WebhookSink) WriteBatch(messages []*utils.CDCMessage) error {
+	for _, message := range messages {
+		decodedMessage, err := message.GetDecodedMessage()
+		if err != nil {
+			return fmt.Errorf("failed to get decoded message: %v", err)
+		}
 
-	var status Status
-	if err := json.Unmarshal(data, &status); err != nil {
-		return fmt.Errorf("failed to unmarshal status: %v", err)
-	}
-
-	s.lastLSN = status.LastLSN
-	log.Info().Str("lsn", s.lastLSN.String()).Msg("Loaded last LSN from file")
-	return nil
-}
-
-func (s *WebhookSink) saveStatus() error {
-	status := Status{
-		LastLSN: s.lastLSN,
-	}
-
-	data, err := json.Marshal(status)
-	if err != nil {
-		return fmt.Errorf("failed to marshal status: %v", err)
-	}
-
-	if err := os.WriteFile(s.lsnFile, data, 0600); err != nil {
-		return fmt.Errorf("failed to write status file: %v", err)
-	}
-
-	return nil
-}
-
-func (s *WebhookSink) WriteBatch(data []interface{}) error {
-	for _, item := range data {
-		jsonData, err := json.Marshal(item)
+		jsonData, err := json.Marshal(decodedMessage)
 		if err != nil {
 			return fmt.Errorf("failed to marshal data to JSON: %v", err)
 		}
@@ -90,6 +47,7 @@ func (s *WebhookSink) WriteBatch(data []interface{}) error {
 	return nil
 }
 
+// sendWithRetry sends data to the webhook endpoint with retry logic
 func (s *WebhookSink) sendWithRetry(jsonData []byte) error {
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -122,15 +80,7 @@ func (s *WebhookSink) sendWithRetry(jsonData []byte) error {
 	return nil
 }
 
-func (s *WebhookSink) GetLastLSN() (pglogrepl.LSN, error) {
-	return s.lastLSN, nil
-}
-
-func (s *WebhookSink) SetLastLSN(lsn pglogrepl.LSN) error {
-	s.lastLSN = lsn
-	return s.saveStatus()
-}
-
+// Close performs any necessary cleanup (no-op for WebhookSink)
 func (s *WebhookSink) Close() error {
 	return nil
 }

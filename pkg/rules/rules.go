@@ -72,19 +72,27 @@ func NewRegexTransformRule(table, column string, params map[string]interface{}) 
 		return nil, fmt.Errorf("invalid regex pattern: %w", err)
 	}
 
-	transform := func(v utils.CDCValue) (utils.CDCValue, error) {
-		str, ok := v.Value.(string)
+	transform := func(m *utils.CDCMessage) (*utils.CDCMessage, error) {
+		value, err := m.GetColumnValue(column)
+		if err != nil {
+			return m, nil
+		}
+		str, ok := value.(string)
 		if !ok {
 			logger.Warn().
 				Str("table", table).
 				Str("column", column).
-				Str("type", fmt.Sprintf("%T", v.Value)).
+				Str("type", fmt.Sprintf("%T", value)).
 				Msg("Regex transform skipped: only works on string values")
-			return v, nil
+			return m, nil
 		}
-		return utils.CDCValue{Type: v.Type, Value: regex.ReplaceAllString(str, replace)}, nil
+		transformed := regex.ReplaceAllString(str, replace)
+		err = m.SetColumnValue(column, transformed)
+		if err != nil {
+			return nil, err
+		}
+		return m, nil
 	}
-
 	return &TransformRule{TableName: table, ColumnName: column, Transform: transform}, nil
 }
 
@@ -95,21 +103,29 @@ func NewMaskTransformRule(table, column string, params map[string]interface{}) (
 		return nil, fmt.Errorf("mask_char parameter is required for mask transform")
 	}
 
-	transform := func(v utils.CDCValue) (utils.CDCValue, error) {
-		str, ok := v.Value.(string)
+	transform := func(m *utils.CDCMessage) (*utils.CDCMessage, error) {
+		value, err := m.GetColumnValue(column)
+		if err != nil {
+			return m, nil
+		}
+		str, ok := value.(string)
 		if !ok {
 			logger.Warn().
 				Str("table", table).
 				Str("column", column).
-				Str("type", fmt.Sprintf("%T", v.Value)).
+				Str("type", fmt.Sprintf("%T", value)).
 				Msg("Mask transform skipped: only works on string values")
-			return v, nil
+			return m, nil
 		}
 		if len(str) <= 2 {
-			return v, nil
+			return m, nil
 		}
 		masked := string(str[0]) + strings.Repeat(maskChar, len(str)-2) + string(str[len(str)-1])
-		return utils.CDCValue{Type: v.Type, Value: masked}, nil
+		err = m.SetColumnValue(column, masked)
+		if err != nil {
+			return nil, err
+		}
+		return m, nil
 	}
 
 	return &TransformRule{TableName: table, ColumnName: column, Transform: transform}, nil
@@ -129,13 +145,13 @@ func NewFilterRule(table, column string, params map[string]interface{}) (Rule, e
 	operations, _ := params["operations"].([]OperationType)
 	allowEmptyDeletes, _ := params["allow_empty_deletes"].(bool)
 
-	var condition func(utils.CDCValue) bool
+	var condition func(*utils.CDCMessage) bool
 
 	switch operator {
 	case "eq", "ne", "gt", "lt", "gte", "lte":
-		condition = NewComparisonCondition(operator, value)
+		condition = NewComparisonCondition(column, operator, value)
 	case "contains":
-		condition = NewContainsCondition(value)
+		condition = NewContainsCondition(column, value)
 	default:
 		return nil, fmt.Errorf("unsupported operator: %s", operator)
 	}
@@ -156,11 +172,23 @@ func NewFilterRule(table, column string, params map[string]interface{}) (Rule, e
 }
 
 // NewComparisonCondition creates a new comparison condition function
-func NewComparisonCondition(operator string, value interface{}) func(utils.CDCValue) bool {
-	return func(v utils.CDCValue) bool {
-		switch v.Type {
+func NewComparisonCondition(column, operator string, value interface{}) func(*utils.CDCMessage) bool {
+	return func(m *utils.CDCMessage) bool {
+		columnValue, err := m.GetColumnValue(column)
+		if err != nil {
+			return false
+		}
+
+		colIndex := m.GetColumnIndex(column)
+		if colIndex == -1 {
+			return false
+		}
+
+		columnType := m.Columns[colIndex].DataType
+
+		switch columnType {
 		case pgtype.Int2OID, pgtype.Int4OID, pgtype.Int8OID:
-			intVal, ok := utils.ToInt64(v.Value)
+			intVal, ok := utils.ToInt64(columnValue)
 			if !ok {
 				return false
 			}
@@ -170,7 +198,7 @@ func NewComparisonCondition(operator string, value interface{}) func(utils.CDCVa
 			}
 			return compareValues(intVal, compareVal, operator)
 		case pgtype.Float4OID, pgtype.Float8OID:
-			floatVal, ok := utils.ToFloat64(v.Value)
+			floatVal, ok := utils.ToFloat64(columnValue)
 			if !ok {
 				return false
 			}
@@ -180,7 +208,7 @@ func NewComparisonCondition(operator string, value interface{}) func(utils.CDCVa
 			}
 			return compareValues(floatVal, compareVal, operator)
 		case pgtype.TextOID, pgtype.VarcharOID:
-			strVal, ok := v.Value.(string)
+			strVal, ok := columnValue.(string)
 			if !ok {
 				return false
 			}
@@ -190,7 +218,7 @@ func NewComparisonCondition(operator string, value interface{}) func(utils.CDCVa
 			}
 			return compareValues(strVal, compareVal, operator)
 		case pgtype.TimestampOID, pgtype.TimestamptzOID:
-			timeVal, ok := v.Value.(time.Time)
+			timeVal, ok := columnValue.(time.Time)
 			if !ok {
 				return false
 			}
@@ -198,9 +226,9 @@ func NewComparisonCondition(operator string, value interface{}) func(utils.CDCVa
 			if err != nil {
 				return false
 			}
-			return compareValues(timeVal, compareVal, operator)
+			return compareValues(timeVal.UTC(), compareVal.UTC(), operator)
 		case pgtype.BoolOID:
-			boolVal, ok := v.Value.(bool)
+			boolVal, ok := utils.ToBool(columnValue)
 			if !ok {
 				return false
 			}
@@ -210,7 +238,7 @@ func NewComparisonCondition(operator string, value interface{}) func(utils.CDCVa
 			}
 			return compareValues(boolVal, compareVal, operator)
 		case pgtype.NumericOID:
-			numVal, ok := v.Value.(string)
+			numVal, ok := columnValue.(string)
 			if !ok {
 				return false
 			}
@@ -226,9 +254,13 @@ func NewComparisonCondition(operator string, value interface{}) func(utils.CDCVa
 }
 
 // NewContainsCondition creates a new contains condition function
-func NewContainsCondition(value interface{}) func(utils.CDCValue) bool {
-	return func(v utils.CDCValue) bool {
-		str, ok := v.Value.(string)
+func NewContainsCondition(column string, value interface{}) func(*utils.CDCMessage) bool {
+	return func(m *utils.CDCMessage) bool {
+		columnValue, err := m.GetColumnValue(column)
+		if err != nil {
+			return false
+		}
+		str, ok := columnValue.(string)
 		if !ok {
 			return false
 		}
@@ -318,57 +350,43 @@ func compareNumericValues(a, b string, operator string) bool {
 }
 
 // Apply applies the transform rule to the provided data
-func (r *TransformRule) Apply(data map[string]utils.CDCValue, operation OperationType) (map[string]utils.CDCValue, error) {
-	if !containsOperation(r.Operations, operation) {
-		return data, nil
+func (r *TransformRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, error) {
+	if !containsOperation(r.Operations, OperationType(message.Type)) {
+		return message, nil
 	}
 
 	// Don't apply rule if asked not to
-	if operation == OperationDelete && r.AllowEmptyDeletes {
-		return data, nil
+	if message.Type == "DELETE" && r.AllowEmptyDeletes {
+		return message, nil
 	}
 
-	if value, ok := data[r.ColumnName]; ok {
-		transformed, err := r.Transform(value)
-		if err != nil {
-			return nil, err
-		}
-		data[r.ColumnName] = transformed
-	}
-	return data, nil
+	return r.Transform(message)
 }
 
 // Apply applies the filter rule to the provided data
-func (r *FilterRule) Apply(data map[string]utils.CDCValue, operation OperationType) (map[string]utils.CDCValue, error) {
-	if !containsOperation(r.Operations, operation) {
-		return data, nil
+func (r *FilterRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, error) {
+	if !containsOperation(r.Operations, OperationType(message.Type)) {
+		return message, nil
 	}
 
 	// Don't apply rule if asked not to
-	if operation == OperationDelete && r.AllowEmptyDeletes {
-		return data, nil
+	if message.Type == "DELETE" && r.AllowEmptyDeletes {
+		return message, nil
 	}
 
-	if value, ok := data[r.ColumnName]; ok {
-		passes := r.Condition(value)
-		logger.Debug().
-			Str("column", r.ColumnName).
-			Interface("value", value).
-			Any("operation", operation).
-			Bool("passes", passes).
-			Bool("allowEmptyDeletes", r.AllowEmptyDeletes).
-			Msg("Filter condition result")
-		if !passes {
-			return nil, nil // filter out
-		}
-	} else {
-		logger.Warn().
-			Str("column", r.ColumnName).
-			Any("operation", operation).
-			Bool("allowEmptyDeletes", r.AllowEmptyDeletes).
-			Msg("Column not found in data")
+	passes := r.Condition(message)
+	logger.Debug().
+		Str("column", r.ColumnName).
+		Any("operation", message.Type).
+		Bool("passes", passes).
+		Bool("allowEmptyDeletes", r.AllowEmptyDeletes).
+		Msg("Filter condition result")
+
+	if !passes {
+		return nil, nil // filter out
 	}
-	return data, nil
+
+	return message, nil
 }
 
 // containsOperation checks if the given operation is in the list of operations
