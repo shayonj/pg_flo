@@ -1,4 +1,4 @@
-# PostgreSQL connection settings
+# [Replicator] PostgreSQL connection settings
 host: "localhost" # PostgreSQL host (env: PG_FLO_HOST)
 port: 5432 # PostgreSQL port (env: PG_FLO_PORT)
 dbname: "your_database" # PostgreSQL database name (env: PG_FLO_DBNAME)
@@ -26,15 +26,19 @@ stdout-format: "json" # Output format for stdout sink (json or csv) (env: PG_FLO
 # File sink settings
 file-output-dir: "/tmp/pg_flo-output" # Output directory for file sink (env: PG_FLO_FILE_OUTPUT_DIR)
 
-# Postgres sink settings
-postgres-host: "" # Target PostgreSQL host (env: PG_FLO_POSTGRES_HOST)
-postgres-port: 5432 # Target PostgreSQL port (env: PG_FLO_POSTGRES_PORT)
-postgres-dbname: "" # Target PostgreSQL database name (env: PG_FLO_POSTGRES_DBNAME)
-postgres-user: "" # Target PostgreSQL user (env: PG_FLO_POSTGRES_USER)
-postgres-password: "" # Target PostgreSQL password (env: PG_FLO_POSTGRES_PASSWORD)
-postgres-sync-schema: false # Sync schema from source to target (env: PG_FLO_POSTGRES_SYNC_SCHEMA)
+# [Worker] Postgres sink settings
+target-host: "" # Target PostgreSQL host (env: PG_FLO_TARGET_HOST)
+target-port: 5432 # Target PostgreSQL port (env: PG_FLO_TARGET_PORT)
+target-dbname: "" # Target PostgreSQL database name (env: PG_FLO_TARGET_DBNAME)
+target-user: "" # Target PostgreSQL user (env: PG_FLO_TARGET_USER)
+target-password: "" # Target PostgreSQL password (env: PG_FLO_TARGET_PASSWORD)
+target-sync-schema: false # Sync schema from source to target (env: PG_FLO_TARGET_SYNC_SCHEMA)
+target-disable-foreign-keys: false # Disable foreign key constraints on target (env: PG_FLO_TARGET_DISABLE_FOREIGN_KEYS)
+source-host: "" # Source PostgreSQL host (env: PG_FLO_SOURCE_HOST)
+source-port: 5432 # Source PostgreSQL port (env: PG_FLO_SOURCE_PORT)
+source-dbname: "" # Source PostgreSQL database name (env: PG_FLO_SOURCE_DBNAME)
+source-user: "" # Source PostgreSQL user (env: PG_FLO_SOURCE_USER)
+source-password: "" # Source PostgreSQL password (env: PG_FLO_SOURCE_PASSWORD)
 
 # Webhook sink settings
 webhook-url: "" # Webhook URL to send data (env: PG_FLO_WEBHOOK_URL)
-webhook-batch-size: 100 # Number of messages to batch before sending (env: PG_FLO_WEBHOOK_BATCH_SIZE)
-webhook-retry-max: 3 # Maximum number of retries for failed requests (env: PG_FLO_WEBHOOK_RETRY_MAX)
