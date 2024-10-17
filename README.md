@@ -1,6 +1,6 @@
 # 🌊 pg_flo
 
--## ![](internal/demo.gif)
+![](internal/demo.gif)
 
 [![CI](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml)
 [![Integration  ](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml)
