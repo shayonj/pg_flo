@@ -42,7 +42,7 @@ type BaseReplicator struct {
 
 // NewBaseReplicator creates a new BaseReplicator instance
 func NewBaseReplicator(config Config, replicationConn ReplicationConnection, standardConn StandardConnection, natsClient NATSClient) *BaseReplicator {
-	logger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Str("component", "replicator").Logger()
+	logger := log.With().Str("component", "replicator").Logger()
 
 	br := &BaseReplicator{
 		Config:          config,
@@ -154,13 +154,18 @@ func (r *BaseReplicator) StreamChanges(ctx context.Context, stopChan <-chan stru
 	lastStatusUpdate := time.Now()
 	standbyMessageTimeout := time.Second * 10
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		<-stopChan
+		cancel()
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			r.Logger.Info().Msg("Stopping StreamChanges")
-			return nil
-		case <-stopChan:
-			r.Logger.Info().Msg("Stop signal received, exiting StreamChanges")
 			return nil
 		default:
 			if err := r.ProcessNextMessage(ctx, &lastStatusUpdate, standbyMessageTimeout); err != nil {
@@ -178,7 +183,7 @@ func (r *BaseReplicator) ProcessNextMessage(ctx context.Context, lastStatusUpdat
 	msg, err := r.ReplicationConn.ReceiveMessage(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			r.Logger.Info().Msg("Context canceled or deadline exceeded, stopping message processing")
+			r.Logger.Debug().Msg("Context canceled or deadline exceeded, stopping message processing")
 			return nil
 		}
 		r.Logger.Error().Err(err).Msg("Error processing next message")

@@ -38,7 +38,7 @@ func init() {
 
 // NewWorker creates and returns a new Worker instance with the provided NATS client, rule engine, sink, and group.
 func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, sink sinks.Sink, group string) *Worker {
-	logger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Str("component", "worker").Logger()
+	logger := log.With().Str("component", "worker").Logger()
 
 	return &Worker{
 		natsClient:     natsClient,
