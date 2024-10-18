@@ -38,12 +38,24 @@ func ConvertToPgCompatibleOutput(value interface{}, oid uint32) ([]byte, error) 
 	case pgtype.TextOID, pgtype.VarcharOID:
 		return []byte(value.(string)), nil
 	case pgtype.ByteaOID:
-		return []byte(fmt.Sprintf("\\x%x", value.([]byte))), nil
+		if byteaData, ok := value.([]byte); ok {
+			return byteaData, nil
+		}
+		return nil, fmt.Errorf("invalid bytea data type")
 	case pgtype.TimestampOID, pgtype.TimestamptzOID:
 		return []byte(value.(time.Time).Format(time.RFC3339Nano)), nil
 	case pgtype.DateOID:
 		return []byte(value.(time.Time).Format("2006-01-02")), nil
-	case pgtype.JSONOID, pgtype.JSONBOID:
+	case pgtype.JSONOID:
+		switch v := value.(type) {
+		case string:
+			return []byte(v), nil
+		case []byte:
+			return v, nil
+		default:
+			return nil, fmt.Errorf("unsupported type for JSON data: %T", value)
+		}
+	case pgtype.JSONBOID:
 		if jsonBytes, ok := value.([]byte); ok {
 			return jsonBytes, nil
 		}

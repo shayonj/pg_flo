@@ -231,7 +231,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				expected: []map[string]interface{}{
 					{"name": "data", "type": "jsonb", "value": json.RawMessage(`{"key": "value"}`)},
 					{"name": "tags", "type": "text[]", "value": "{tag1,tag2,tag3}"},
-					{"name": "image", "type": "bytea", "value": `\x01020304`},
+					{"name": "image", "type": "bytea", "value": []byte{0x01, 0x02, 0x03, 0x04}},
 					{"name": "created_at", "type": "timestamptz", "value": time.Date(2023, time.May, 1, 12, 34, 56, 789000000, time.UTC)},
 				},
 			},
@@ -318,7 +318,9 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 						case "text[]":
 							assert.Equal(t, expectedVal, string(actualColumn.Data))
 						case "bytea":
-							assert.Equal(t, expectedVal, string(actualColumn.Data))
+							expectedBytes, ok := expectedValue["value"].([]byte)
+							assert.True(t, ok, "Expected value for bytea should be []byte")
+							assert.Equal(t, expectedBytes, actualColumn.Data)
 						case "timestamptz":
 							actualTime, err := time.Parse(time.RFC3339Nano, string(actualColumn.Data))
 							assert.NoError(t, err)

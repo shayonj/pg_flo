@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"encoding/gob"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -212,7 +213,7 @@ func DecodeValue(data []byte, dataType uint32) (interface{}, error) {
 	if data == nil {
 		return nil, nil
 	}
-
+	strData := string(data)
 	switch dataType {
 	case pgtype.BoolOID:
 		return strconv.ParseBool(string(data))
@@ -225,12 +226,22 @@ func DecodeValue(data []byte, dataType uint32) (interface{}, error) {
 	case pgtype.TextOID, pgtype.VarcharOID:
 		return string(data), nil
 	case pgtype.ByteaOID:
+		if strings.HasPrefix(strData, "\\x") {
+			hexString := strData[2:]
+			byteData, err := hex.DecodeString(hexString)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode bytea hex string: %v", err)
+			}
+			return byteData, nil
+		}
 		return data, nil
 	case pgtype.TimestampOID, pgtype.TimestamptzOID:
 		return ParseTimestamp(string(data))
 	case pgtype.DateOID:
 		return time.Parse("2006-01-02", string(data))
-	case pgtype.JSONOID, pgtype.JSONBOID:
+	case pgtype.JSONOID:
+		return string(data), nil
+	case pgtype.JSONBOID:
 		var result interface{}
 		err := json.Unmarshal(data, &result)
 		return result, err

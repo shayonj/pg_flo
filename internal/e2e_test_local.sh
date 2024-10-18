@@ -51,16 +51,16 @@ make build
 #   exit 1
 # fi
 
-setup_docker
+# setup_docker
 
-# Run new e2e resume test
-log "Running new e2e resume test..."
-if ./internal/e2e_resume.sh; then
-  success "E2E resume test completed successfully"
-else
-  error "E2E resume test failed"
-  exit 1
-fi
+# # Run new e2e resume test
+# log "Running new e2e resume test..."
+# if ./internal/e2e_resume.sh; then
+#   success "E2E resume test completed successfully"
+# else
+#   error "E2E resume test failed"
+#   exit 1
+# fi
 
 # setup_docker
 
@@ -84,15 +84,25 @@ fi
 #   exit 1
 # fi
 
+# setup_docker
+
+# Run new e2e test for Postgres changes
+# log "Running new e2e test Postgres Sink..."
+# if ./internal/e2e_postgres.sh; then
+#   success "E2E test for Postgres Sink completed successfully"
+# else
+#   error "E2E test for Postgres Sink failed"
+#   exit 1
+# fi
+
 setup_docker
 
-# Run new e2e test for DDL changes
 log "Running new e2e test Postgres Sink..."
-if ./internal/e2e_postgres.sh; then
+if ./internal/e2e_postgres_data_type.sh; then
   success "E2E test for Postgres Sink completed successfully"
 else
   error "E2E test for Postgres Sink failed"
   exit 1
 fi
 
-# success "All local e2e tests completed successfully"
+success "All local e2e tests completed successfully"
