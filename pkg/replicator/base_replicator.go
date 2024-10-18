@@ -154,18 +154,13 @@ func (r *BaseReplicator) StreamChanges(ctx context.Context, stopChan <-chan stru
 	lastStatusUpdate := time.Now()
 	standbyMessageTimeout := time.Second * 10
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	go func() {
-		<-stopChan
-		cancel()
-	}()
-
 	for {
 		select {
 		case <-ctx.Done():
 			r.Logger.Info().Msg("Stopping StreamChanges")
+			return nil
+		case <-stopChan:
+			r.Logger.Info().Msg("Stop signal received, exiting StreamChanges")
 			return nil
 		default:
 			if err := r.ProcessNextMessage(ctx, &lastStatusUpdate, standbyMessageTimeout); err != nil {
