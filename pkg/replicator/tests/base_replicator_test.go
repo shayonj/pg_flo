@@ -307,7 +307,7 @@ func TestBaseReplicator(t *testing.T) {
 			})).Return(nil)
 
 			ctx := context.Background()
-			err := br.HandleInsertMessage(ctx, msg)
+			err := br.HandleInsertMessage(ctx, msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -322,7 +322,7 @@ func TestBaseReplicator(t *testing.T) {
 			msg := &pglogrepl.InsertMessage{RelationID: 999}
 
 			ctx := context.Background()
-			err := br.HandleInsertMessage(ctx, msg)
+			err := br.HandleInsertMessage(ctx, msg, pglogrepl.LSN(0))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})
@@ -514,7 +514,7 @@ func TestBaseReplicator(t *testing.T) {
 					})).Return(nil)
 
 					ctx := context.Background()
-					err := br.HandleInsertMessage(ctx, msg)
+					err := br.HandleInsertMessage(ctx, msg, pglogrepl.LSN(0))
 					assert.NoError(t, err)
 
 					mockNATSClient.AssertExpectations(t)
@@ -576,7 +576,7 @@ func TestBaseReplicator(t *testing.T) {
 			})).Return(nil)
 
 			ctx := context.Background()
-			err := br.HandleUpdateMessage(ctx, msg)
+			err := br.HandleUpdateMessage(ctx, msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -590,7 +590,7 @@ func TestBaseReplicator(t *testing.T) {
 			msg := &pglogrepl.UpdateMessage{RelationID: 999}
 
 			ctx := context.Background()
-			err := br.HandleUpdateMessage(ctx, msg)
+			err := br.HandleUpdateMessage(ctx, msg, pglogrepl.LSN(0))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})
@@ -650,7 +650,7 @@ func TestBaseReplicator(t *testing.T) {
 			})).Return(nil)
 
 			ctx := context.Background()
-			err := br.HandleUpdateMessage(ctx, msg)
+			err := br.HandleUpdateMessage(ctx, msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -704,7 +704,7 @@ func TestBaseReplicator(t *testing.T) {
 			})).Return(nil)
 
 			ctx := context.Background()
-			err := br.HandleDeleteMessage(ctx, msg)
+			err := br.HandleDeleteMessage(ctx, msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -718,7 +718,7 @@ func TestBaseReplicator(t *testing.T) {
 			msg := &pglogrepl.DeleteMessage{RelationID: 999}
 
 			ctx := context.Background()
-			err := br.HandleDeleteMessage(ctx, msg)
+			err := br.HandleDeleteMessage(ctx, msg, pglogrepl.LSN(0))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})

@@ -35,7 +35,7 @@ type CDCMessage struct {
 	NewTuple         *pglogrepl.TupleData
 	OldTuple         *pglogrepl.TupleData
 	PrimaryKeyColumn string
-	LSN              pglogrepl.LSN
+	LSN              string
 	EmittedAt        time.Time
 }
 

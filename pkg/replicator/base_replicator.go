@@ -230,7 +230,7 @@ func (r *BaseReplicator) handleXLogData(ctx context.Context, data []byte, lastSt
 		return fmt.Errorf("failed to parse XLogData: %w", err)
 	}
 
-	if err := r.processWALData(ctx, xld.WALData); err != nil {
+	if err := r.processWALData(ctx, xld.WALData, xld.WALStart); err != nil {
 		return fmt.Errorf("failed to process WAL data: %w", err)
 	}
 
@@ -254,7 +254,7 @@ func (r *BaseReplicator) handlePrimaryKeepaliveMessage(ctx context.Context, data
 }
 
 // processWALData handles different types of WAL messages
-func (r *BaseReplicator) processWALData(ctx context.Context, walData []byte) error {
+func (r *BaseReplicator) processWALData(ctx context.Context, walData []byte, lsn pglogrepl.LSN) error {
 	logicalMsg, err := pglogrepl.Parse(walData)
 	if err != nil {
 		return fmt.Errorf("failed to parse WAL data: %w", err)
@@ -266,11 +266,11 @@ func (r *BaseReplicator) processWALData(ctx context.Context, walData []byte) err
 	case *pglogrepl.BeginMessage:
 		return r.HandleBeginMessage(ctx, msg)
 	case *pglogrepl.InsertMessage:
-		return r.HandleInsertMessage(ctx, msg)
+		return r.HandleInsertMessage(ctx, msg, lsn)
 	case *pglogrepl.UpdateMessage:
-		return r.HandleUpdateMessage(ctx, msg)
+		return r.HandleUpdateMessage(ctx, msg, lsn)
 	case *pglogrepl.DeleteMessage:
-		return r.HandleDeleteMessage(ctx, msg)
+		return r.HandleDeleteMessage(ctx, msg, lsn)
 	case *pglogrepl.CommitMessage:
 		return r.HandleCommitMessage(ctx, msg)
 	default:
@@ -292,7 +292,7 @@ func (r *BaseReplicator) HandleBeginMessage(_ context.Context, _ *pglogrepl.Begi
 }
 
 // HandleInsertMessage handles InsertMessage messages
-func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl.InsertMessage) error {
+func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl.InsertMessage, lsn pglogrepl.LSN) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
@@ -305,6 +305,7 @@ func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl
 		Columns:   relation.Columns,
 		EmittedAt: time.Now(),
 		NewTuple:  msg.Tuple,
+		LSN:       lsn.String(),
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -312,7 +313,7 @@ func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl
 }
 
 // HandleUpdateMessage handles UpdateMessage messages
-func (r *BaseReplicator) HandleUpdateMessage(ctx context.Context, msg *pglogrepl.UpdateMessage) error {
+func (r *BaseReplicator) HandleUpdateMessage(ctx context.Context, msg *pglogrepl.UpdateMessage, lsn pglogrepl.LSN) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
@@ -325,6 +326,7 @@ func (r *BaseReplicator) HandleUpdateMessage(ctx context.Context, msg *pglogrepl
 		Columns:  relation.Columns,
 		NewTuple: msg.NewTuple,
 		OldTuple: msg.OldTuple,
+		LSN:      lsn.String(),
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -332,7 +334,7 @@ func (r *BaseReplicator) HandleUpdateMessage(ctx context.Context, msg *pglogrepl
 }
 
 // HandleDeleteMessage handles DeleteMessage messages
-func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl.DeleteMessage) error {
+func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl.DeleteMessage, lsn pglogrepl.LSN) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
@@ -346,6 +348,7 @@ func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl
 		Columns:   relation.Columns,
 		OldTuple:  msg.OldTuple,
 		EmittedAt: time.Now(),
+		LSN:       lsn.String(),
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
