@@ -4,11 +4,20 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/goccy/go-json"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
+
+func init() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{
+		Out:        os.Stderr,
+		TimeFormat: "15:04:05.000",
+	})
+}
 
 // WebhookSink represents a sink that sends data to a webhook endpoint
 type WebhookSink struct {

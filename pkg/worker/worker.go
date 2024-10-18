@@ -3,11 +3,13 @@ package worker
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/pgflonats"
 	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/sinks"
@@ -27,6 +29,11 @@ type Worker struct {
 	flushInterval  time.Duration
 	shutdownCh     chan struct{}
 	wg             sync.WaitGroup
+}
+
+func init() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05.000"})
+	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
 }
 
 // NewWorker creates and returns a new Worker instance with the provided NATS client, rule engine, sink, and group.

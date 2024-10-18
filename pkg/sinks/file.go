@@ -10,8 +10,16 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/shayonj/pg_flo/pkg/utils"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+func init() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{
+		Out:        os.Stderr,
+		TimeFormat: "15:04:05.000",
+	})
+}
 
 // FileSink represents a sink that writes data to files
 type FileSink struct {

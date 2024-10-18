@@ -8,9 +8,17 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
+
+func init() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{
+		Out:        os.Stderr,
+		TimeFormat: "15:04:05.000",
+	})
+}
 
 // PostgresSink represents a sink for PostgreSQL database
 type PostgresSink struct {

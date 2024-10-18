@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"os"
+
 	"github.com/jackc/pgtype"
 	"github.com/rs/zerolog"
 	"github.com/shayonj/pg_flo/pkg/utils"
@@ -16,7 +18,10 @@ import (
 var logger zerolog.Logger
 
 func init() {
-	logger = zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()
+	logger = zerolog.New(zerolog.ConsoleWriter{
+		Out:        os.Stderr,
+		TimeFormat: "15:04:05.000",
+	}).With().Timestamp().Logger()
 }
 
 // NewTransformRule creates a new transform rule based on the provided parameters

@@ -287,7 +287,6 @@ verify_data() {
       log "🔹 Source checksum: $src_checksum"
       log "🔹 Target checksum: $tgt_checksum"
 
-      # Optionally, retrieve and log the actual data for manual inspection
       local src_data
       local tgt_data
       src_data=$(run_sql "SELECT row_to_json(t.*) FROM public.data_type_test t WHERE id = $src_id;")
