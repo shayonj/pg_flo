@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go"
 	"github.com/shayonj/pg_flo/pkg/pgflonats"
 	"github.com/shayonj/pg_flo/pkg/replicator"
 	"github.com/stretchr/testify/mock"
@@ -281,7 +281,7 @@ func (m *MockNATSClient) GetState(ctx context.Context) (pgflonats.State, error) 
 }
 
 // JetStream mocks the JetStream method
-func (m *MockNATSClient) JetStream() jetstream.JetStream {
+func (m *MockNATSClient) JetStream() nats.JetStreamContext {
 	args := m.Called()
-	return args.Get(0).(jetstream.JetStream)
+	return args.Get(0).(nats.JetStreamContext)
 }
