@@ -289,7 +289,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -306,8 +306,7 @@ func TestBaseReplicator(t *testing.T) {
 				return true
 			})).Return(nil)
 
-			ctx := context.Background()
-			err := br.HandleInsertMessage(ctx, msg, pglogrepl.LSN(0))
+			err := br.HandleInsertMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -321,8 +320,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			msg := &pglogrepl.InsertMessage{RelationID: 999}
 
-			ctx := context.Background()
-			err := br.HandleInsertMessage(ctx, msg, pglogrepl.LSN(0))
+			err := br.HandleInsertMessage(msg, pglogrepl.LSN(0))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})
@@ -464,7 +462,7 @@ func TestBaseReplicator(t *testing.T) {
 						msg.Tuple.Columns[i] = &pglogrepl.TupleDataColumn{Data: data}
 					}
 
-					mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
+					mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 						var decodedMsg utils.CDCMessage
 						err := decodedMsg.UnmarshalBinary(data)
 						if err != nil {
@@ -513,8 +511,7 @@ func TestBaseReplicator(t *testing.T) {
 						return true
 					})).Return(nil)
 
-					ctx := context.Background()
-					err := br.HandleInsertMessage(ctx, msg, pglogrepl.LSN(0))
+					err := br.HandleInsertMessage(msg, pglogrepl.LSN(0))
 					assert.NoError(t, err)
 
 					mockNATSClient.AssertExpectations(t)
@@ -558,7 +555,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -575,8 +572,7 @@ func TestBaseReplicator(t *testing.T) {
 				return true
 			})).Return(nil)
 
-			ctx := context.Background()
-			err := br.HandleUpdateMessage(ctx, msg, pglogrepl.LSN(0))
+			err := br.HandleUpdateMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -589,8 +585,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			msg := &pglogrepl.UpdateMessage{RelationID: 999}
 
-			ctx := context.Background()
-			err := br.HandleUpdateMessage(ctx, msg, pglogrepl.LSN(0))
+			err := br.HandleUpdateMessage(msg, pglogrepl.LSN(0))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})
@@ -625,7 +620,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -649,8 +644,7 @@ func TestBaseReplicator(t *testing.T) {
 				return true
 			})).Return(nil)
 
-			ctx := context.Background()
-			err := br.HandleUpdateMessage(ctx, msg, pglogrepl.LSN(0))
+			err := br.HandleUpdateMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -686,7 +680,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -703,8 +697,7 @@ func TestBaseReplicator(t *testing.T) {
 				return true
 			})).Return(nil)
 
-			ctx := context.Background()
-			err := br.HandleDeleteMessage(ctx, msg, pglogrepl.LSN(0))
+			err := br.HandleDeleteMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -717,8 +710,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			msg := &pglogrepl.DeleteMessage{RelationID: 999}
 
-			ctx := context.Background()
-			err := br.HandleDeleteMessage(ctx, msg, pglogrepl.LSN(0))
+			err := br.HandleDeleteMessage(msg, pglogrepl.LSN(0))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown relation ID: 999")
 		})
@@ -738,12 +730,11 @@ func TestBaseReplicator(t *testing.T) {
 				CommitLSN:  12345,
 			}
 
-			mockNATSClient.On("GetState", mock.Anything).Return(pgflonats.State{}, nil)
+			mockNATSClient.On("GetState").Return(pgflonats.State{}, nil)
 
-			mockNATSClient.On("SaveState", mock.Anything, pgflonats.State{LSN: pglogrepl.LSN(12345)}).Return(nil)
+			mockNATSClient.On("SaveState", pgflonats.State{LSN: pglogrepl.LSN(12345)}).Return(nil)
 
-			ctx := context.Background()
-			err := br.HandleCommitMessage(ctx, msg)
+			err := br.HandleCommitMessage(msg)
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -777,7 +768,7 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
+			mockNATSClient.On("PublishMessage", "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
 				var decodedMsg utils.CDCMessage
 				err := decodedMsg.UnmarshalBinary(data)
 				if err != nil {
@@ -803,8 +794,7 @@ func TestBaseReplicator(t *testing.T) {
 				return true
 			})).Return(nil)
 
-			ctx := context.Background()
-			err := br.PublishToNATS(ctx, data)
+			err := br.PublishToNATS(data)
 			assert.NoError(t, err)
 
 			mockNATSClient.AssertExpectations(t)
@@ -836,10 +826,9 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.Anything).Return(errors.New("failed to publish message"))
+			mockNATSClient.On("PublishMessage", "pgflo.test_group", mock.Anything).Return(errors.New("failed to publish message"))
 
-			ctx := context.Background()
-			err := br.PublishToNATS(ctx, data)
+			err := br.PublishToNATS(data)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to publish message")
 

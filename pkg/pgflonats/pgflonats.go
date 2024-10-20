@@ -1,7 +1,6 @@
 package pgflonats
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,7 +104,7 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 }
 
 // PublishMessage publishes a message to the specified NATS subject.
-func (nc *NATSClient) PublishMessage(ctx context.Context, subject string, data []byte) error {
+func (nc *NATSClient) PublishMessage(subject string, data []byte) error {
 	_, err := nc.js.Publish(subject, data)
 	if err != nil {
 		return fmt.Errorf("failed to publish message: %w", err)
@@ -120,7 +119,7 @@ func (nc *NATSClient) Close() error {
 }
 
 // SaveState saves the current replication state to NATS.
-func (nc *NATSClient) SaveState(ctx context.Context, state State) error {
+func (nc *NATSClient) SaveState(state State) error {
 	kv, err := nc.js.KeyValue(nc.stateBucket)
 	if err != nil {
 		return fmt.Errorf("failed to get KV bucket: %v", err)
@@ -140,7 +139,7 @@ func (nc *NATSClient) SaveState(ctx context.Context, state State) error {
 }
 
 // GetState retrieves the last saved state from NATS, initializing a new state if none is found.
-func (nc *NATSClient) GetState(ctx context.Context) (State, error) {
+func (nc *NATSClient) GetState() (State, error) {
 	kv, err := nc.js.KeyValue(nc.stateBucket)
 	if err != nil {
 		return State{}, fmt.Errorf("failed to get KV bucket: %v", err)
@@ -151,7 +150,7 @@ func (nc *NATSClient) GetState(ctx context.Context) (State, error) {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			initialState := State{LastProcessedSeq: 0}
 			// Try to create initial state
-			if err := nc.SaveState(ctx, initialState); err != nil {
+			if err := nc.SaveState(initialState); err != nil {
 				// If SaveState fails because the key already exists, fetch it again
 				if errors.Is(err, nats.ErrKeyExists) || errors.Is(err, nats.ErrUpdateMetaDeleted) {
 					entry, err = kv.Get("state")

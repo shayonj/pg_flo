@@ -43,9 +43,9 @@ type PgxPoolConn interface {
 }
 
 type NATSClient interface {
-	PublishMessage(ctx context.Context, subject string, data []byte) error
+	PublishMessage(subject string, data []byte) error
 	Close() error
-	SaveState(ctx context.Context, state pgflonats.State) error
-	GetState(ctx context.Context) (pgflonats.State, error)
+	SaveState(state pgflonats.State) error
+	GetState() (pgflonats.State, error)
 	JetStream() nats.JetStreamContext
 }

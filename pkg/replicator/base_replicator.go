@@ -221,7 +221,7 @@ func (r *BaseReplicator) ProcessNextMessage(ctx context.Context, lastStatusUpdat
 func (r *BaseReplicator) handleCopyData(ctx context.Context, msg *pgproto3.CopyData, lastStatusUpdate *time.Time) error {
 	switch msg.Data[0] {
 	case pglogrepl.XLogDataByteID:
-		return r.handleXLogData(ctx, msg.Data[1:], lastStatusUpdate)
+		return r.handleXLogData(msg.Data[1:], lastStatusUpdate)
 	case pglogrepl.PrimaryKeepaliveMessageByteID:
 		return r.handlePrimaryKeepaliveMessage(ctx, msg.Data[1:], lastStatusUpdate)
 	default:
@@ -231,13 +231,13 @@ func (r *BaseReplicator) handleCopyData(ctx context.Context, msg *pgproto3.CopyD
 }
 
 // handleXLogData processes XLogData messages
-func (r *BaseReplicator) handleXLogData(ctx context.Context, data []byte, lastStatusUpdate *time.Time) error {
+func (r *BaseReplicator) handleXLogData(data []byte, lastStatusUpdate *time.Time) error {
 	xld, err := pglogrepl.ParseXLogData(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse XLogData: %w", err)
 	}
 
-	if err := r.processWALData(ctx, xld.WALData, xld.WALStart); err != nil {
+	if err := r.processWALData(xld.WALData, xld.WALStart); err != nil {
 		return fmt.Errorf("failed to process WAL data: %w", err)
 	}
 
@@ -261,7 +261,7 @@ func (r *BaseReplicator) handlePrimaryKeepaliveMessage(ctx context.Context, data
 }
 
 // processWALData handles different types of WAL messages
-func (r *BaseReplicator) processWALData(ctx context.Context, walData []byte, lsn pglogrepl.LSN) error {
+func (r *BaseReplicator) processWALData(walData []byte, lsn pglogrepl.LSN) error {
 	logicalMsg, err := pglogrepl.Parse(walData)
 	if err != nil {
 		return fmt.Errorf("failed to parse WAL data: %w", err)
@@ -271,15 +271,15 @@ func (r *BaseReplicator) processWALData(ctx context.Context, walData []byte, lsn
 	case *pglogrepl.RelationMessage:
 		r.handleRelationMessage(msg)
 	case *pglogrepl.BeginMessage:
-		return r.HandleBeginMessage(ctx, msg)
+		return r.HandleBeginMessage(msg)
 	case *pglogrepl.InsertMessage:
-		return r.HandleInsertMessage(ctx, msg, lsn)
+		return r.HandleInsertMessage(msg, lsn)
 	case *pglogrepl.UpdateMessage:
-		return r.HandleUpdateMessage(ctx, msg, lsn)
+		return r.HandleUpdateMessage(msg, lsn)
 	case *pglogrepl.DeleteMessage:
-		return r.HandleDeleteMessage(ctx, msg, lsn)
+		return r.HandleDeleteMessage(msg, lsn)
 	case *pglogrepl.CommitMessage:
-		return r.HandleCommitMessage(ctx, msg)
+		return r.HandleCommitMessage(msg)
 	default:
 		r.Logger.Warn().Type("message", msg).Msg("Received unexpected logical replication message")
 	}
@@ -294,12 +294,12 @@ func (r *BaseReplicator) handleRelationMessage(msg *pglogrepl.RelationMessage) {
 }
 
 // HandleBeginMessage handles BeginMessage messages
-func (r *BaseReplicator) HandleBeginMessage(_ context.Context, _ *pglogrepl.BeginMessage) error {
+func (r *BaseReplicator) HandleBeginMessage(_ *pglogrepl.BeginMessage) error {
 	return nil
 }
 
 // HandleInsertMessage handles InsertMessage messages
-func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl.InsertMessage, lsn pglogrepl.LSN) error {
+func (r *BaseReplicator) HandleInsertMessage(msg *pglogrepl.InsertMessage, lsn pglogrepl.LSN) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
@@ -316,11 +316,11 @@ func (r *BaseReplicator) HandleInsertMessage(ctx context.Context, msg *pglogrepl
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
-	return r.PublishToNATS(ctx, cdcMessage)
+	return r.PublishToNATS(cdcMessage)
 }
 
 // HandleUpdateMessage handles UpdateMessage messages
-func (r *BaseReplicator) HandleUpdateMessage(ctx context.Context, msg *pglogrepl.UpdateMessage, lsn pglogrepl.LSN) error {
+func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage, lsn pglogrepl.LSN) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
@@ -337,11 +337,11 @@ func (r *BaseReplicator) HandleUpdateMessage(ctx context.Context, msg *pglogrepl
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
-	return r.PublishToNATS(ctx, cdcMessage)
+	return r.PublishToNATS(cdcMessage)
 }
 
 // HandleDeleteMessage handles DeleteMessage messages
-func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl.DeleteMessage, lsn pglogrepl.LSN) error {
+func (r *BaseReplicator) HandleDeleteMessage(msg *pglogrepl.DeleteMessage, lsn pglogrepl.LSN) error {
 	relation, ok := r.Relations[msg.RelationID]
 	if !ok {
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
@@ -359,14 +359,14 @@ func (r *BaseReplicator) HandleDeleteMessage(ctx context.Context, msg *pglogrepl
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
-	return r.PublishToNATS(ctx, cdcMessage)
+	return r.PublishToNATS(cdcMessage)
 }
 
 // HandleCommitMessage processes a commit message and publishes it to NATS
-func (r *BaseReplicator) HandleCommitMessage(ctx context.Context, msg *pglogrepl.CommitMessage) error {
+func (r *BaseReplicator) HandleCommitMessage(msg *pglogrepl.CommitMessage) error {
 	r.LastLSN = msg.CommitLSN
 
-	if err := r.SaveState(ctx, msg.CommitLSN); err != nil {
+	if err := r.SaveState(msg.CommitLSN); err != nil {
 		r.Logger.Error().Err(err).Msg("Failed to save replication state")
 		return err
 	}
@@ -375,14 +375,14 @@ func (r *BaseReplicator) HandleCommitMessage(ctx context.Context, msg *pglogrepl
 }
 
 // PublishToNATS publishes a message to NATS
-func (r *BaseReplicator) PublishToNATS(ctx context.Context, data utils.CDCMessage) error {
+func (r *BaseReplicator) PublishToNATS(data utils.CDCMessage) error {
 	binaryData, err := data.MarshalBinary()
 	if err != nil {
 		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
 	subject := fmt.Sprintf("pgflo.%s", r.Config.Group)
-	err = r.NATSClient.PublishMessage(ctx, subject, binaryData)
+	err = r.NATSClient.PublishMessage(subject, binaryData)
 	if err != nil {
 		r.Logger.Error().
 			Err(err).
@@ -462,7 +462,7 @@ func (r *BaseReplicator) GracefulShutdown(ctx context.Context) error {
 		r.Logger.Warn().Err(err).Msg("Failed to send final standby status update")
 	}
 
-	if err := r.SaveState(ctx, r.LastLSN); err != nil {
+	if err := r.SaveState(r.LastLSN); err != nil {
 		r.Logger.Warn().Err(err).Msg("Failed to save final state")
 	}
 
@@ -523,18 +523,18 @@ func (r *BaseReplicator) getPrimaryKeyColumn(schema, table string) (string, erro
 }
 
 // SaveState saves the current replication state
-func (r *BaseReplicator) SaveState(ctx context.Context, lsn pglogrepl.LSN) error {
-	state, err := r.NATSClient.GetState(ctx)
+func (r *BaseReplicator) SaveState(lsn pglogrepl.LSN) error {
+	state, err := r.NATSClient.GetState()
 	if err != nil {
 		return fmt.Errorf("failed to get current state: %w", err)
 	}
 	state.LSN = lsn
-	return r.NATSClient.SaveState(ctx, state)
+	return r.NATSClient.SaveState(state)
 }
 
 // GetLastState retrieves the last saved replication state
-func (r *BaseReplicator) GetLastState(ctx context.Context) (pglogrepl.LSN, error) {
-	state, err := r.NATSClient.GetState(ctx)
+func (r *BaseReplicator) GetLastState() (pglogrepl.LSN, error) {
+	state, err := r.NATSClient.GetState()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get state: %w", err)
 	}

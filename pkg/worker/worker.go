@@ -191,14 +191,14 @@ func (w *Worker) flushBuffer() error {
 		return err
 	}
 
-	state, err := w.natsClient.GetState(context.Background())
+	state, err := w.natsClient.GetState()
 	if err != nil {
 		w.logger.Error().Err(err).Msg("Failed to get current state")
 		return err
 	}
 
 	state.LastProcessedSeq = w.lastSavedState
-	if err := w.natsClient.SaveState(context.Background(), state); err != nil {
+	if err := w.natsClient.SaveState(state); err != nil {
 		w.logger.Error().Err(err).Msg("Failed to save state")
 		return err
 	}

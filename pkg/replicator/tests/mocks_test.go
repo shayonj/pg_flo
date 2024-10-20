@@ -257,8 +257,8 @@ type MockNATSClient struct {
 }
 
 // PublishMessage mocks the PublishMessage method
-func (m *MockNATSClient) PublishMessage(ctx context.Context, subject string, data []byte) error {
-	args := m.Called(ctx, subject, data)
+func (m *MockNATSClient) PublishMessage(subject string, data []byte) error {
+	args := m.Called(subject, data)
 	return args.Error(0)
 }
 
@@ -269,14 +269,14 @@ func (m *MockNATSClient) Close() error {
 }
 
 // SaveState mocks the SaveState method
-func (m *MockNATSClient) SaveState(ctx context.Context, state pgflonats.State) error {
-	args := m.Called(ctx, state)
+func (m *MockNATSClient) SaveState(state pgflonats.State) error {
+	args := m.Called(state)
 	return args.Error(0)
 }
 
 // GetState mocks the GetState method
-func (m *MockNATSClient) GetState(ctx context.Context) (pgflonats.State, error) {
-	args := m.Called(ctx)
+func (m *MockNATSClient) GetState() (pgflonats.State, error) {
+	args := m.Called()
 	return args.Get(0).(pgflonats.State), args.Error(1)
 }
 
