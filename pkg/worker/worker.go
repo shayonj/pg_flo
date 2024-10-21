@@ -2,12 +2,13 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go" // Use the standard NATS package
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/pgflonats"
@@ -65,56 +66,32 @@ func (w *Worker) Start(ctx context.Context) error {
 		Str("group", w.group).
 		Msg("Starting worker")
 
-	state, err := w.natsClient.GetState(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get state: %w", err)
-	}
-
 	js := w.natsClient.JetStream()
-	streamInfo, err := js.Stream(ctx, stream)
+
+	consumerName := fmt.Sprintf("pgflo_%s_consumer", w.group)
+
+	consumerConfig := &nats.ConsumerConfig{
+		Durable:       consumerName,
+		FilterSubject: subject,
+		AckPolicy:     nats.AckExplicitPolicy,
+	}
+
+	_, err := js.AddConsumer(stream, consumerConfig)
+	if err != nil && !errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
+		w.logger.Error().Err(err).Msg("Failed to add or update consumer")
+		return fmt.Errorf("failed to add or update consumer: %w", err)
+	}
+
+	sub, err := js.PullSubscribe(subject, consumerName)
 	if err != nil {
-		w.logger.Error().Err(err).Msg("Failed to get stream info")
-		return fmt.Errorf("failed to get stream info: %w", err)
-	}
-
-	info, err := streamInfo.Info(ctx)
-	if err != nil {
-		w.logger.Error().Err(err).Msg("Failed to get stream info details")
-		return fmt.Errorf("failed to get stream info details: %w", err)
-	}
-
-	w.logger.Info().
-		Uint64("messages", info.State.Msgs).
-		Uint64("first_seq", info.State.FirstSeq).
-		Uint64("last_seq", info.State.LastSeq).
-		Msg("Stream info")
-
-	startSeq := state.LastProcessedSeq + 1
-	if startSeq < info.State.FirstSeq {
-		w.logger.Warn().
-			Uint64("start_seq", startSeq).
-			Uint64("stream_first_seq", info.State.FirstSeq).
-			Msg("Start sequence is before the first available message, adjusting to stream's first sequence")
-		startSeq = info.State.FirstSeq
-	}
-
-	w.logger.Info().Uint64("start_seq", startSeq).Msg("Starting consumer from sequence")
-
-	consumerConfig := jetstream.OrderedConsumerConfig{
-		FilterSubjects: []string{subject},
-		DeliverPolicy:  jetstream.DeliverByStartSequencePolicy,
-		OptStartSeq:    startSeq,
-	}
-
-	cons, err := js.OrderedConsumer(ctx, stream, consumerConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create ordered consumer: %w", err)
+		w.logger.Error().Err(err).Msg("Failed to subscribe to subject")
+		return fmt.Errorf("failed to subscribe to subject: %w", err)
 	}
 
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		if err := w.processMessages(ctx, cons); err != nil && err != context.Canceled {
+		if err := w.processMessages(ctx, sub); err != nil && err != context.Canceled {
 			w.logger.Error().Err(err).Msg("Error processing messages")
 		}
 	}()
@@ -129,36 +106,9 @@ func (w *Worker) Start(ctx context.Context) error {
 }
 
 // processMessages continuously processes messages from the NATS consumer.
-func (w *Worker) processMessages(ctx context.Context, cons jetstream.Consumer) error {
-	iter, err := cons.Messages()
-	if err != nil {
-		return fmt.Errorf("failed to get message iterator: %w", err)
-	}
-
+func (w *Worker) processMessages(ctx context.Context, sub *nats.Subscription) error {
 	flushTicker := time.NewTicker(w.flushInterval)
 	defer flushTicker.Stop()
-
-	msgCh := make(chan jetstream.Msg)
-	errCh := make(chan error)
-
-	go func() {
-		defer close(msgCh)
-		for {
-			msg, err := iter.Next()
-			if err != nil {
-				if err == jetstream.ErrMsgIteratorClosed {
-					return
-				}
-				errCh <- err
-				return
-			}
-			select {
-			case msgCh <- msg:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
 
 	for {
 		select {
@@ -169,16 +119,20 @@ func (w *Worker) processMessages(ctx context.Context, cons jetstream.Consumer) e
 			if err := w.flushBuffer(); err != nil {
 				w.logger.Error().Err(err).Msg("Failed to flush buffer on interval")
 			}
-		case err := <-errCh:
-			w.logger.Error().Err(err).Msg("Error receiving message")
-			return err
-		case msg, ok := <-msgCh:
-			if !ok {
-				w.logger.Info().Msg("Message channel closed, flushing buffer")
-				return w.flushBuffer()
+		default:
+			msgs, err := sub.Fetch(w.batchSize, nats.MaxWait(500*time.Millisecond))
+			if err != nil && !errors.Is(err, nats.ErrTimeout) {
+				w.logger.Error().Err(err).Msg("Error fetching messages")
+				continue
 			}
-			if err := w.processMessage(msg); err != nil {
-				w.logger.Error().Err(err).Msg("Failed to process message")
+
+			for _, msg := range msgs {
+				if err := w.processMessage(msg); err != nil {
+					w.logger.Error().Err(err).Msg("Failed to process message")
+				}
+				if err := msg.Ack(); err != nil {
+					w.logger.Error().Err(err).Msg("Failed to acknowledge message")
+				}
 			}
 			if len(w.buffer) >= w.batchSize {
 				if err := w.flushBuffer(); err != nil {
@@ -190,7 +144,7 @@ func (w *Worker) processMessages(ctx context.Context, cons jetstream.Consumer) e
 }
 
 // processMessage handles a single message, applying rules, writing to the sink, and updating the last processed sequence.
-func (w *Worker) processMessage(msg jetstream.Msg) error {
+func (w *Worker) processMessage(msg *nats.Msg) error {
 	metadata, err := msg.Metadata()
 	if err != nil {
 		w.logger.Error().Err(err).Msg("Failed to get message metadata")
@@ -198,7 +152,7 @@ func (w *Worker) processMessage(msg jetstream.Msg) error {
 	}
 
 	var cdcMessage utils.CDCMessage
-	err = cdcMessage.UnmarshalBinary(msg.Data())
+	err = cdcMessage.UnmarshalBinary(msg.Data)
 	if err != nil {
 		w.logger.Error().Err(err).Msg("Failed to unmarshal message")
 		return err
@@ -237,14 +191,14 @@ func (w *Worker) flushBuffer() error {
 		return err
 	}
 
-	state, err := w.natsClient.GetState(context.Background())
+	state, err := w.natsClient.GetState()
 	if err != nil {
 		w.logger.Error().Err(err).Msg("Failed to get current state")
 		return err
 	}
 
 	state.LastProcessedSeq = w.lastSavedState
-	if err := w.natsClient.SaveState(context.Background(), state); err != nil {
+	if err := w.natsClient.SaveState(state); err != nil {
 		w.logger.Error().Err(err).Msg("Failed to save state")
 		return err
 	}

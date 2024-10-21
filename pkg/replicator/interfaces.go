@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go"
 	"github.com/shayonj/pg_flo/pkg/pgflonats"
 )
 
@@ -43,9 +43,9 @@ type PgxPoolConn interface {
 }
 
 type NATSClient interface {
-	PublishMessage(ctx context.Context, subject string, data []byte) error
+	PublishMessage(subject string, data []byte) error
 	Close() error
-	SaveState(ctx context.Context, state pgflonats.State) error
-	GetState(ctx context.Context) (pgflonats.State, error)
-	JetStream() jetstream.JetStream
+	SaveState(state pgflonats.State) error
+	GetState() (pgflonats.State, error)
+	JetStream() nats.JetStreamContext
 }

@@ -42,6 +42,8 @@ services:
       - "-js"
       - "-sd"
       - "/data"
+      - "-m"
+      - "8222"
     volumes:
       - nats_data:/data
     ports:

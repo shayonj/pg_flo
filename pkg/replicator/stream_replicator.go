@@ -27,7 +27,7 @@ func (r *StreamReplicator) StartReplication() error {
 		return err
 	}
 
-	startLSN, err := r.getStartLSN(ctx)
+	startLSN, err := r.getStartLSN()
 	if err != nil {
 		return err
 	}
@@ -104,8 +104,8 @@ func (r *StreamReplicator) setup(ctx context.Context) error {
 }
 
 // getStartLSN determines the starting LSN for replication.
-func (r *StreamReplicator) getStartLSN(ctx context.Context) (pglogrepl.LSN, error) {
-	startLSN, err := r.BaseReplicator.GetLastState(ctx)
+func (r *StreamReplicator) getStartLSN() (pglogrepl.LSN, error) {
+	startLSN, err := r.BaseReplicator.GetLastState()
 	if err != nil {
 		r.Logger.Warn().Err(err).Msg("Failed to get last LSN, starting from 0")
 		return pglogrepl.LSN(0), nil

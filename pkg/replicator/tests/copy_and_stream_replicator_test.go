@@ -64,7 +64,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockTx.On("Commit", mock.Anything).Return(nil)
 		mockPoolConn.On("Release").Return()
 
-		mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
+		mockNATSClient.On("PublishMessage", "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
 			var decodedMsg utils.CDCMessage
 			err := decodedMsg.UnmarshalBinary(data)
 			if err != nil {
@@ -159,7 +159,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockTx.On("Commit", mock.Anything).Return(nil)
 		mockPoolConn.On("Release").Return()
 
-		mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.Anything).Return(nil)
+		mockNATSClient.On("PublishMessage", "pgflo.test_group", mock.Anything).Return(nil)
 
 		csr := &replicator.CopyAndStreamReplicator{
 			BaseReplicator: replicator.BaseReplicator{
@@ -281,7 +281,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				mockTx.On("Commit", mock.Anything).Return(nil)
 				mockPoolConn.On("Release").Return()
 
-				mockNATSClient.On("PublishMessage", mock.Anything, "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
+				mockNATSClient.On("PublishMessage", "pgflo.test_group", mock.MatchedBy(func(data []byte) bool {
 					var decodedMsg utils.CDCMessage
 					err := decodedMsg.UnmarshalBinary(data)
 					assert.NoError(t, err, "Failed to unmarshal binary data")

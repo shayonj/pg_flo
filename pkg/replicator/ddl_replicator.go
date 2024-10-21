@@ -238,7 +238,7 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 			},
 		}
 
-		if err := d.BaseRepl.PublishToNATS(ctx, cdcMessage); err != nil {
+		if err := d.BaseRepl.PublishToNATS(cdcMessage); err != nil {
 			d.BaseRepl.Logger.Error().Err(err).Msg("Error during publishing DDL event to NATS")
 			return nil
 		}

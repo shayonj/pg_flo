@@ -370,7 +370,7 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 		}
 
 		r.BaseReplicator.AddPrimaryKeyInfo(&cdcMessage, tableName)
-		if err := r.BaseReplicator.PublishToNATS(ctx, cdcMessage); err != nil {
+		if err := r.BaseReplicator.PublishToNATS(cdcMessage); err != nil {
 			return 0, fmt.Errorf("failed to publish insert event to NATS: %v", err)
 		}
 
