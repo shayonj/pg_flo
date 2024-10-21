@@ -72,6 +72,26 @@ I invite you to take a look through [issues](https://github.com/shayonj/pg_flo/i
 
 This setup will start a replicator that captures changes from PostgreSQL and publishes them to NATS, and a worker that applies the specified rules before outputting the data to stdout.
 
+## Table of Contents
+
+- [Usage](#usage)
+  - [Configuration](#configuration)
+  - [Group](#group)
+- [Replicator and Worker](#replicator-and-worker)
+- [Streaming Modes](#streaming-modes)
+  - [Stream Mode](#stream-mode)
+  - [Copy and Stream Mode](#copy-and-stream-mode)
+  - [Running the Worker](#running-the-worker)
+- [Transformation and Filtering Rules](#transformation-and-filtering-rules)
+- [Supported Destinations](#supported-destinations)
+- [How it Works](#how-it-works)
+- [Scaling](#scaling)
+  - [Simple Scaling with Groups](#simple-scaling-with-groups)
+- [Development](#development)
+  - [End-to-End Tests](#end-to-end-tests)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Usage
 
 ### Configuration
@@ -231,4 +251,4 @@ Contributions are welcome! Please open an issue or submit a pull request on GitH
 
 ## License
 
-`pg_flo` is licensed under Elastic License 2.0 (ELv2). Please see the LICENSE file for additional information.
+`pg_flo` is licensed under Apache License 2.0. Please see the LICENSE file for additional information.
