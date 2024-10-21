@@ -3,9 +3,9 @@
 ![](internal/demo.gif)
 
 [![CI](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml)
-[![Integration  ](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml)
+[![Integration](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml)
 
-`pg_flo` is the easiest way to move and transform data between PostgreSQL databases. It uses PostgreSQL Logical Replication to stream inserts, updates, deletes, and DDL changes to multiple destinations. With support for parallelizable bulk copy, near real-time streaming, and powerful transformation and filtering rules, `pg_flo` simplifies data sync and ETL processes.
+`pg_flo` is the easiest way to move and transform data between PostgreSQL databases. It uses PostgreSQL Logical Replication to stream inserts, updates, deletes, and DDL changes to multiple destinations including other PostgreSQL databases. With support for parallelizable bulk copy, near real-time streaming, and powerful transformation and filtering rules, `pg_flo` simplifies data sync and ETL processes.
 
 ⚠️ CURRENTLY UNDER ACTIVE DEVELOPMENT. ACCEPTING FEEDBACK/ISSUES/PULL REQUESTS 🚀
 
@@ -17,7 +17,7 @@
   - Regex-based transformations for string data
   - Masking sensitive information
   - Filtering based on column values using various comparison operators
-  - Support for multiple data types (integers, floats, strings, timestamps and booleans)
+  - Support for multiple data types (integers, floats, strings, timestamps, and booleans)
   - Ability to apply rules selectively to INSERT, UPDATE, or DELETE operations
 - Flexible data routing:
   - 🔜 Re-route data to different tables (as long as the schema matches)
@@ -30,45 +30,45 @@ I invite you to take a look through [issues](https://github.com/shayonj/pg_flo/i
 
 ## Quick Start
 
-1. Install `pg_flo`:
+1. **Install `pg_flo`**:
 
-```shell
-go get https://github.com/shayonj/pg_flo.git
-```
+   ```shell
+   go get https://github.com/shayonj/pg_flo.git
+   ```
 
-2. Create a configuration file (e.g., `pg_flo.yaml`) based on the [example configuration](internal/pg-flo.yaml).
+2. **Create a configuration file** (e.g., `pg_flo.yaml`) based on the [example configuration](internal/pg-flo.yaml).
 
    Note: All configuration options can also be set using environment variables. See the example configuration file for the corresponding environment variable names.
 
-3. Start the replicator:
+3. **Start the replicator**:
 
-```shell
-pg_flo replicator --config /path/to/pg_flo.yaml
-```
+   ```shell
+   pg_flo replicator
+   ```
 
-4. Create a rules configuration file (e.g., `rules.yaml`):
+4. **Create a rules configuration file** (e.g., `rules.yaml`):
 
-```yaml
-- type: transform
-  column: email
-  parameters:
-    type: mask
-    mask_char: "*"
-  operations: [INSERT, UPDATE]
+   ```yaml
+   - type: transform
+     column: email
+     parameters:
+       type: mask
+       mask_char: "*"
+     operations: [INSERT, UPDATE]
 
-- type: filter
-  column: age
-  parameters:
-    operator: gte
-    value: 18
-  operations: [INSERT, UPDATE, DELETE]
-```
+   - type: filter
+     column: age
+     parameters:
+       operator: gte
+       value: 18
+     operations: [INSERT, UPDATE, DELETE]
+   ```
 
-5. Start the worker with rules:
+5. **Start the worker with rules**:
 
-```shell
-pg_flo worker stdout --config /path/to/pg_flo.yaml --rules-config /path/to/rules.yaml
-```
+   ```shell
+   pg_flo worker stdout
+   ```
 
 This setup will start a replicator that captures changes from PostgreSQL and publishes them to NATS, and a worker that applies the specified rules before outputting the data to stdout.
 
@@ -82,6 +82,16 @@ You can configure `pg_flo` using CLI flags, a YAML configuration file, or enviro
 
 The `--group` parameter is used to identify each replication process, which can contain one or more tables. It allows you to run multiple instances of `pg_flo` on the same database or across different databases without conflicts. The group name is used to isolate replication slots and publications in PostgreSQL and for internal state keeping for resumability.
 
+## Replicator and Worker
+
+`pg_flo` operates using two main components: the **Replicator** and the **Worker**.
+
+- **Replicator**: The replicator connects to the source PostgreSQL database and streams the logical replication changes. It publishes these changes to NATS JetStream, ensuring that data modifications are captured and made available for processing.
+
+- **Worker**: The worker subscribes to the messages published by the replicator in NATS. It applies any specified transformation and filtering rules to the data changes and then writes the processed data to the configured sink (destination), such as another PostgreSQL database, a file, or stdout.
+
+This architecture allows for separation of concerns, where the replicator focuses on capturing changes, and the worker handles data processing and writing to the destination.
+
 ## Streaming Modes
 
 `pg_flo` supports two modes of operation: **Stream Mode** and **Copy and Stream Mode**.
@@ -90,10 +100,10 @@ The `--group` parameter is used to identify each replication process, which can 
 
 In Stream mode, `pg_flo` continuously streams changes from the source PostgreSQL database to NATS, starting from the last known WAL position.
 
-#### Running the Replicator in Stream Mode
+#### Running the Replicator in Stream Mode (default)
 
 ```shell
-pg_flo replicator --config /path/to/pg_flo.yaml
+pg_flo replicator
 ```
 
 ### Copy and Stream Mode
@@ -103,7 +113,7 @@ Copy-and-stream mode performs an initial parallelizable bulk copy of the existin
 #### Running the Replicator in Copy and Stream Mode
 
 ```shell
-pg_flo replicator --config /path/to/pg_flo.yaml --copy-and-stream --max-copy-workers-per-table 4
+pg_flo replicator --copy-and-stream --max-copy-workers-per-table 4
 ```
 
 ### Running the Worker
@@ -111,7 +121,7 @@ pg_flo replicator --config /path/to/pg_flo.yaml --copy-and-stream --max-copy-wor
 The worker command remains the same for both modes since it processes messages from NATS.
 
 ```shell
-pg_flo worker <sink_type> --config /path/to/pg_flo.yaml [additional_flags]
+pg_flo worker <sink_type> [additional_flags]
 ```
 
 ## Transformation and Filtering Rules
@@ -122,7 +132,6 @@ To use these rules, create a YAML configuration file and specify its path using 
 
 ```shell
 pg_flo worker file \
-  --config /path/to/pg_flo.yaml \
   --rules-config /path/to/rules-config.yaml
 ```
 
@@ -140,23 +149,63 @@ An example rules configuration file can be found at [internal/rules.yml](interna
 
 Examples:
 
-1. Using stdout sink:
+1. **Using stdout sink**:
 
-```shell
-pg_flo worker stdout --config /path/to/pg_flo.yaml
-```
+   ```shell
+   pg_flo worker stdout
+   ```
 
-2. Using PostgreSQL sink:
+2. **Using PostgreSQL sink**:
 
-```shell
-pg_flo worker postgres --config /path/to/pg_flo.yaml
-```
+   ```shell
+   pg_flo worker postgres
+   ```
 
 You can read more about the supported sinks with examples and the interface [here](pkg/sinks/README.md).
 
 ## How it Works
 
 You can read about how the tool works briefly [here](internal/how-it-works.md).
+
+## Scaling
+
+### Simple Scaling with Groups
+
+To maintain the correct order of data changes as they occurred in the source database, it's recommended to run a single worker instance per group. If you need to replicate different tables or sets of tables independently at a faster rate, you can use the `--group` parameter to create separate groups for each table set.
+
+**Steps to Scale Using Groups:**
+
+1. **Define Groups**: Assign a unique group name to each set of tables you want to replicate independently using the `--group` parameter.
+
+2. **Start a Replicator for Each Group**: Run the replicator for each group to capture changes for its respective tables.
+
+   ```shell
+   pg_flo replicator --group group_name --tables table1,table2
+   ```
+
+3. **Run a Worker for Each Group**: Start a worker for each group to process the data changes.
+
+   ```shell
+   pg_flo worker <sink_type> --group group_name [additional_flags]
+   ```
+
+**Example:**
+
+If you have two sets of tables, `sales` and `inventory`, you can set up two groups:
+
+- Group `sales`:
+
+  ```shell
+  pg_flo replicator --group sales --tables sales
+  pg_flo worker postgres --group sales
+  ```
+
+- Group `inventory`:
+
+  ```shell
+  pg_flo replicator --group inventory --tables inventory
+  pg_flo worker postgres --group inventory
+  ```
 
 ## Development
 
