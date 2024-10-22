@@ -224,7 +224,7 @@ func DecodeCDCMessage(data []byte) (*CDCMessage, error) {
 
 // DecodeValue decodes a byte slice into a Go value based on the PostgreSQL data type
 func DecodeValue(data []byte, dataType uint32) (interface{}, error) {
-	if data == nil {
+	if data == nil || strings.EqualFold(string(data), "NULL") {
 		return nil, nil
 	}
 	strData := string(data)
@@ -234,7 +234,10 @@ func DecodeValue(data []byte, dataType uint32) (interface{}, error) {
 	case pgtype.Int2OID, pgtype.Int4OID, pgtype.Int8OID:
 		return strconv.ParseInt(string(data), 10, 64)
 	case pgtype.Float4OID, pgtype.Float8OID:
-		return strconv.ParseFloat(string(data), 64)
+		if strings.EqualFold(strData, "NULL") {
+			return nil, nil
+		}
+		return strconv.ParseFloat(strData, 64)
 	case pgtype.NumericOID:
 		return string(data), nil
 	case pgtype.TextOID, pgtype.VarcharOID:
@@ -293,13 +296,13 @@ func DecodeArray(data []byte, dataType uint32) (interface{}, error) {
 		for i, elem := range elements {
 			if elem == "NULL" {
 				result[i] = nil
-			} else {
-				val, err := strconv.ParseInt(elem, 10, 64)
-				if err != nil {
-					return nil, err
-				}
-				result[i] = val
+				continue
 			}
+			val, err := strconv.ParseInt(elem, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = val
 		}
 		return result, nil
 	case pgtype.Float4ArrayOID, pgtype.Float8ArrayOID:
@@ -307,13 +310,13 @@ func DecodeArray(data []byte, dataType uint32) (interface{}, error) {
 		for i, elem := range elements {
 			if elem == "NULL" {
 				result[i] = nil
-			} else {
-				val, err := strconv.ParseFloat(elem, 64)
-				if err != nil {
-					return nil, err
-				}
-				result[i] = val
+				continue
 			}
+			val, err := strconv.ParseFloat(elem, 64)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = val
 		}
 		return result, nil
 	case pgtype.BoolArrayOID:
@@ -321,13 +324,13 @@ func DecodeArray(data []byte, dataType uint32) (interface{}, error) {
 		for i, elem := range elements {
 			if elem == "NULL" {
 				result[i] = nil
-			} else {
-				val, err := strconv.ParseBool(elem)
-				if err != nil {
-					return nil, err
-				}
-				result[i] = val
+				continue
 			}
+			val, err := strconv.ParseBool(elem)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = val
 		}
 		return result, nil
 	default:
