@@ -25,7 +25,14 @@ success() { echo "✅ $1"; }
 error() { echo "❌ $1"; }
 
 run_sql() {
-  PGPASSWORD=$PG_PASSWORD psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DB" -p "$PG_PORT" -q -t -c "$1"
+  if [ ${#1} -gt 1000 ]; then
+    local temp_file=$(mktemp)
+    echo "$1" >"$temp_file"
+    PGPASSWORD=$PG_PASSWORD psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DB" -p "$PG_PORT" -q -t -f "$temp_file"
+    rm "$temp_file"
+  else
+    PGPASSWORD=$PG_PASSWORD psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DB" -p "$PG_PORT" -q -t -c "$1"
+  fi
 }
 
 setup_postgres() {
@@ -71,4 +78,15 @@ show_pg_flo_logs() {
   echo "----------------------------------------"
   cat $pg_flo_WORKER_LOG*
   echo "----------------------------------------"
+}
+
+run_sql_target() {
+  if [ ${#1} -gt 1000 ]; then
+    local temp_file=$(mktemp)
+    echo "$1" >"$temp_file"
+    PGPASSWORD=$TARGET_PG_PASSWORD psql -h "$TARGET_PG_HOST" -U "$TARGET_PG_USER" -d "$TARGET_PG_DB" -p "$TARGET_PG_PORT" -q -t -f "$temp_file"
+    rm "$temp_file"
+  else
+    PGPASSWORD=$TARGET_PG_PASSWORD psql -h "$TARGET_PG_HOST" -U "$TARGET_PG_USER" -d "$TARGET_PG_DB" -p "$TARGET_PG_PORT" -q -t -c "$1"
+  fi
 }

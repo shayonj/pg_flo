@@ -307,9 +307,6 @@ verify_data() {
     return 1
   fi
 }
-run_sql_target() {
-  PGPASSWORD=$TARGET_PG_PASSWORD psql -h "$TARGET_PG_HOST" -U "$TARGET_PG_USER" -d "$TARGET_PG_DB" -p "$TARGET_PG_PORT" -q -t -c "$1"
-}
 
 test_pg_flo_data_types() {
   setup_postgres

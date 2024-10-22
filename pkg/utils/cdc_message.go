@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgtype"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // init registers types with the gob package for encoding/decoding
@@ -38,6 +38,7 @@ type CDCMessage struct {
 	PrimaryKeyColumn string
 	LSN              string
 	EmittedAt        time.Time
+	ToastedColumns   map[string]bool
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface
@@ -135,6 +136,7 @@ func EncodeCDCMessage(m CDCMessage) ([]byte, error) {
 	if err := enc.Encode(m.OldTuple != nil); err != nil {
 		return nil, err
 	}
+
 	if m.OldTuple != nil {
 		if err := enc.Encode(m.OldTuple); err != nil {
 			return nil, err
@@ -144,10 +146,16 @@ func EncodeCDCMessage(m CDCMessage) ([]byte, error) {
 	if err := enc.Encode(m.PrimaryKeyColumn); err != nil {
 		return nil, err
 	}
+
 	if err := enc.Encode(m.LSN); err != nil {
 		return nil, err
 	}
+
 	if err := enc.Encode(m.EmittedAt); err != nil {
+		return nil, err
+	}
+
+	if err := enc.Encode(m.ToastedColumns); err != nil {
 		return nil, err
 	}
 
@@ -198,10 +206,16 @@ func DecodeCDCMessage(data []byte) (*CDCMessage, error) {
 	if err := dec.Decode(&m.PrimaryKeyColumn); err != nil {
 		return nil, err
 	}
+
 	if err := dec.Decode(&m.LSN); err != nil {
 		return nil, err
 	}
+
 	if err := dec.Decode(&m.EmittedAt); err != nil {
+		return nil, err
+	}
+
+	if err := dec.Decode(&m.ToastedColumns); err != nil {
 		return nil, err
 	}
 
@@ -381,4 +395,9 @@ func (m *CDCMessage) GetDecodedMessage() (map[string]interface{}, error) {
 	}
 
 	return decodedMessage, nil
+}
+
+// IsColumnToasted checks if a column was TOASTed
+func (m *CDCMessage) IsColumnToasted(columnName string) bool {
+	return m.ToastedColumns[columnName]
 }
