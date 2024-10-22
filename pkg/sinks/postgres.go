@@ -114,29 +114,49 @@ func (s *PostgresSink) handleUpdate(tx pgx.Tx, message *utils.CDCMessage) error 
 	setClauses := make([]string, 0, len(message.Columns))
 	values := make([]interface{}, 0, len(message.Columns))
 	whereConditions := make([]string, 0)
+	valueIndex := 1
 
-	for i, col := range message.Columns {
-		value, err := message.GetColumnValue(col.Name)
+	for _, col := range message.Columns {
+		if message.IsColumnToasted(col.Name) {
+			// Skip TOAST columns that haven't changed
+			continue
+		}
+
+		newValue, err := message.GetColumnValue(col.Name)
 		if err != nil {
 			return fmt.Errorf("failed to get column value: %v", err)
 		}
-		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col.Name, i+1))
-		values = append(values, value)
+
+		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col.Name, valueIndex))
+		values = append(values, newValue)
+		valueIndex++
 
 		if col.Name == message.PrimaryKeyColumn {
-			whereConditions = append(whereConditions, fmt.Sprintf("%s = $%d", col.Name, i+1))
+			whereConditions = append(whereConditions, fmt.Sprintf("%s = $%d", col.Name, valueIndex))
+			values = append(values, newValue) // Use the same value for the WHERE clause
+			valueIndex++
 		}
 	}
 
-	if len(whereConditions) == 0 {
-		return fmt.Errorf("primary key column not found in the message")
+	if len(setClauses) == 0 {
+		// If there are no columns to update (all were TOAST and unchanged), we can skip this update
+		return nil
 	}
 
-	query := fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s",
-		message.Schema, message.Table, strings.Join(setClauses, ", "), strings.Join(whereConditions, " AND "))
+	query := fmt.Sprintf(
+		"UPDATE %s.%s SET %s WHERE %s",
+		message.Schema,
+		message.Table,
+		strings.Join(setClauses, ", "),
+		strings.Join(whereConditions, " AND "),
+	)
 
 	_, err := tx.Exec(context.Background(), query, values...)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute update query: %v", err)
+	}
+
+	return nil
 }
 
 // handleDelete processes a delete operation

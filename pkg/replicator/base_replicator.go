@@ -327,13 +327,19 @@ func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:     "UPDATE",
-		Schema:   relation.Namespace,
-		Table:    relation.RelationName,
-		Columns:  relation.Columns,
-		NewTuple: msg.NewTuple,
-		OldTuple: msg.OldTuple,
-		LSN:      lsn.String(),
+		Type:           "UPDATE",
+		Schema:         relation.Namespace,
+		Table:          relation.RelationName,
+		Columns:        relation.Columns,
+		NewTuple:       msg.NewTuple,
+		OldTuple:       msg.OldTuple,
+		LSN:            lsn.String(),
+		ToastedColumns: make(map[string]bool),
+	}
+
+	for i, col := range relation.Columns {
+		newVal := msg.NewTuple.Columns[i]
+		cdcMessage.ToastedColumns[col.Name] = newVal.DataType == 'u'
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -347,7 +353,6 @@ func (r *BaseReplicator) HandleDeleteMessage(msg *pglogrepl.DeleteMessage, lsn p
 		return fmt.Errorf("unknown relation ID: %d", msg.RelationID)
 	}
 
-	// todo: write lsn
 	cdcMessage := utils.CDCMessage{
 		Type:      "DELETE",
 		Schema:    relation.Namespace,
