@@ -37,6 +37,19 @@ populate_initial_data() {
     decode(lpad(to_hex(generate_series(1, 4)), 8, '0'), 'hex')
   ;"
   run_sql "UPDATE public.users SET text_col = text_col || ' - Updated';"
+
+  log "Inserting large JSON data..."
+  local large_json='{"data":['
+  for i in {1..10000}; do
+    if [ $i -ne 1 ]; then
+      large_json+=','
+    fi
+    large_json+='{"id":'$i',"name":"Item '$i'","description":"This is a long description for item '$i'. It contains a lot of text to make the JSON larger.","attributes":{"color":"red","size":"large","weight":10.5,"tags":["tag1","tag2","tag3"]}}'
+  done
+  large_json+=']}'
+
+  run_sql "INSERT INTO public.users (int_col, json_col) VALUES (1000001, '$large_json'::jsonb);"
+
   run_sql "ANALYZE public.users;"
   success "Initial data populated"
 }
@@ -112,6 +125,21 @@ compare_row_counts() {
   fi
 }
 
+verify_large_json() {
+  log "Verifying large JSON data..."
+  local json_length=$(jq '.[] | select(.Type == "INSERT" and .NewRow.int_col == 1000001) | .NewRow.json_col | length' "$OUTPUT_DIR"/*.jsonl | head -n 1)
+
+  log "Large JSON length: $json_length"
+
+  if [ "$json_length" -gt 1000000 ]; then
+    success "Large JSON data verified successfully"
+    return 0
+  else
+    error "Large JSON data verification failed. Expected length > 1000000, got $json_length"
+    return 1
+  fi
+}
+
 test_pg_flo_cdc() {
   setup_postgres
   create_users
@@ -129,6 +157,7 @@ test_pg_flo_cdc() {
   sleep 1
 
   compare_row_counts || return 1
+  verify_large_json || return 1
 }
 
 log "Starting pg_flo CDC test..."

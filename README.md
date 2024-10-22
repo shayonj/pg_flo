@@ -87,6 +87,8 @@ This setup will start a replicator that captures changes from PostgreSQL and pub
 - [How it Works](#how-it-works)
 - [Scaling](#scaling)
   - [Simple Scaling with Groups](#simple-scaling-with-groups)
+- [Limits and Considerations](#limits-and-considerations)
+  - [NATS Message Size Limit](#nats-message-size-limit)
 - [Development](#development)
   - [End-to-End Tests](#end-to-end-tests)
 - [Contributing](#contributing)
@@ -226,6 +228,21 @@ If you have two sets of tables, `sales` and `inventory`, you can set up two grou
   pg_flo replicator --group inventory --tables inventory
   pg_flo worker postgres --group inventory
   ```
+
+## Limits and Considerations
+
+### NATS Message Size Limit
+
+By default, NATS has a maximum message size of 1MB. For `pg_flo` to handle larger JSON payloads or TOAST data, we've increased this limit to 8MB in our default configuration. You can adjust this limit by modifying the NATS server configuration:
+
+```yaml
+nats:
+  command:
+    - "--max_payload"
+    - "8388608" # 8MB max payload
+```
+
+If you encounter "maximum payload exceeded" errors, you may need to further increase this limit or feel free to open an issue to discuss other strategies to handle very large data items
 
 ## Development
 
