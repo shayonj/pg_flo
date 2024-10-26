@@ -33,8 +33,18 @@ make build
 
 setup_docker
 
+# log "Running e2e copy & stream tests..."
+# if CI=false ./internal/e2e_copy_and_stream.sh; then
+#   success "Original e2e tests completed successfully"
+# else
+#   error "Original e2e tests failed"
+#   exit 1
+# fi
+
+setup_docker
+
 log "Running e2e copy & stream tests..."
-if CI=false ./internal/e2e_copy_and_stream.sh; then
+if CI=false ./internal/e2e_multi_tenant.sh; then
   success "Original e2e tests completed successfully"
 else
   error "Original e2e tests failed"
