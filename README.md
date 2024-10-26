@@ -7,7 +7,7 @@
 
 `pg_flo` is the easiest way to move and transform data between PostgreSQL databases. It uses PostgreSQL Logical Replication to stream inserts, updates, deletes, and DDL changes to multiple destinations including other PostgreSQL databases. With support for parallelizable bulk copy, near real-time streaming, and powerful transformation and filtering rules, `pg_flo` simplifies data sync and ETL processes.
 
-⚠️ CURRENTLY UNDER ACTIVE DEVELOPMENT. ACCEPTING FEEDBACK/ISSUES/PULL REQUESTS 🚀
+ℹ️ `pg_flo` is in active development. The design and architecture is continuously improving. PRs/Issues are very much welcome 🙏🏽
 
 ## Features
 
