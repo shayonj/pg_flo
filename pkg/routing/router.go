@@ -15,9 +15,9 @@ type ColumnMapping struct {
 }
 
 type TableRoute struct {
-	SourceTable      string                `yaml:"sourceTable"`
-	DestinationTable string                `yaml:"destinationTable"`
-	ColumnMappings   []ColumnMapping       `yaml:"columnMappings"`
+	SourceTable      string                `yaml:"source_table"`
+	DestinationTable string                `yaml:"destination_table"`
+	ColumnMappings   []ColumnMapping       `yaml:"column_mappings"`
 	Operations       []utils.OperationType `yaml:"operations"`
 }
 
@@ -103,10 +103,10 @@ func GetMappedColumnName(mappings []ColumnMapping, sourceName string) string {
 func (r *Router) LoadRoutes(config map[string]TableRoute) error {
 	for sourceName, route := range config {
 		r.logger.Info().
-			Str("sourceTable", sourceName).
-			Str("destinationTable", route.DestinationTable).
+			Str("source_table", sourceName).
+			Str("destination_table", route.DestinationTable).
 			Any("operations", route.Operations).
-			Any("columnMappings", route.ColumnMappings).
+			Any("column_mappings", route.ColumnMappings).
 			Msg("Loading route")
 
 		route.SourceTable = sourceName

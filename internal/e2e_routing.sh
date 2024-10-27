@@ -73,9 +73,9 @@ create_routing_config() {
   log "Creating routing configuration..."
   cat <<EOF >"$ROUTING_CONFIG"
 users:
-  sourceTable: users
-  destinationTable: customers
-  columnMappings:
+  source_table: users
+  destination_table: customers
+  column_mappings:
     - source: id
       destination: customer_id
     - source: username
@@ -91,9 +91,9 @@ users:
     - UPDATE
 
 orders:
-  sourceTable: orders
-  destinationTable: transactions
-  columnMappings:
+  source_table: orders
+  destination_table: transactions
+  column_mappings:
     - source: id
       destination: transaction_id
     - source: total_amount
@@ -106,9 +106,9 @@ orders:
     - DELETE
 
 products:
-  sourceTable: products
-  destinationTable: items
-  columnMappings:
+  source_table: products
+  destination_table: items
+  column_mappings:
     - source: id
       destination: item_id
     - source: name
