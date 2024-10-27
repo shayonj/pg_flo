@@ -58,7 +58,7 @@ Each table configuration supports:
 - Column data types must match between source and destination
 - Primary keys are automatically mapped
 - All specified columns must exist in both tables
-- Operations not listed in `operations` will be ignored
+- Operations not listed in `operations` will be ignored. Defaults to all operations.
 - Unlisted columns are preserved with their original names
 - Complex types (jsonb, arrays) are preserved during mapping
 
