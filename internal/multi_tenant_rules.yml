@@ -1,8 +1,0 @@
-tables:
-  events:
-    - type: filter
-      column: tenant_id
-      parameters:
-        operator: "eq"
-        value: 3
-      operations: [INSERT, UPDATE, DELETE]

@@ -39,7 +39,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_copy_and_stream.sh
+          ./internal/scripts/e2e_copy_and_stream.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -78,7 +78,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_test_stream.sh
+          ./internal/scripts/e2e_test_stream.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -117,7 +117,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_resume.sh
+          ./internal/scripts/e2e_resume.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -156,7 +156,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_transform_filter.sh
+          ./internal/scripts/e2e_transform_filter.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -195,7 +195,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_ddl.sh
+          ./internal/scripts/e2e_ddl.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -239,7 +239,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_postgres.sh
+          ./internal/scripts/e2e_postgres.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -283,7 +283,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_postgres_data_type.sh
+          ./internal/scripts/e2e_postgres_data_type.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -327,7 +327,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_multi_tenant.sh
+          ./internal/scripts/e2e_multi_tenant.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
@@ -371,7 +371,7 @@ jobs:
         run: |
           docker-compose up -d
           sleep 10
-          ./internal/e2e_routing.sh
+          ./internal/scripts/e2e_routing.sh
           docker-compose down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3

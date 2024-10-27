@@ -13,15 +13,14 @@ tables: # Tables to replicate (empty for all tables) (env: PG_FLO_TABLES)
   - "table2"
 copy-and-stream: false # Enable copy and stream mode (env: PG_FLO_COPY_AND_STREAM)
 max-copy-workers-per-table: 4 # Maximum number of parallel workers for copy operation (env: PG_FLO_MAX_COPY_WORKERS_PER_TABLE)
+track-ddl: false # Enable tracking of DDL changes (env: PG_FLO_TRACK_DDL)
 
 # NATS settings
 nats-url: "nats://localhost:4222" # NATS server URL (env: PG_FLO_NATS_URL)
 
 # Worker settings
-rules-config: "/path/to/rules-config.yaml" # Path to rules configuration file (env: PG_FLO_RULES_CONFIG)
-
-# Stdout sink settings
-stdout-format: "json" # Output format for stdout sink (json or csv) (env: PG_FLO_STDOUT_FORMAT)
+rules-config: "/path/to/rules.yaml" # Path to rules configuration file (env: PG_FLO_RULES_CONFIG)
+routing-config: "/path/to/routing.yaml" # Path to routing configuration file (env: PG_FLO_ROUTING_CONFIG)
 
 # File sink settings
 file-output-dir: "/tmp/pg_flo-output" # Output directory for file sink (env: PG_FLO_FILE_OUTPUT_DIR)
@@ -34,6 +33,8 @@ target-user: "" # Target PostgreSQL user (env: PG_FLO_TARGET_USER)
 target-password: "" # Target PostgreSQL password (env: PG_FLO_TARGET_PASSWORD)
 target-sync-schema: false # Sync schema from source to target (env: PG_FLO_TARGET_SYNC_SCHEMA)
 target-disable-foreign-keys: false # Disable foreign key constraints on target (env: PG_FLO_TARGET_DISABLE_FOREIGN_KEYS)
+
+# Source connection for schema sync (only needed with target-sync-schema: true)
 source-host: "" # Source PostgreSQL host (env: PG_FLO_SOURCE_HOST)
 source-port: 5432 # Source PostgreSQL port (env: PG_FLO_SOURCE_PORT)
 source-dbname: "" # Source PostgreSQL database name (env: PG_FLO_SOURCE_DBNAME)

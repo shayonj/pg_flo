@@ -105,9 +105,6 @@ func init() {
 
 	markPersistentFlagRequired(workerCmd, "group", "nats-url")
 
-	// Stdout sink flags
-	stdoutWorkerCmd.Flags().String("stdout-format", "json", "Output format for stdout sink (json or csv) (env: PG_FLO_STDOUT_FORMAT)")
-
 	// File sink flags
 	fileWorkerCmd.Flags().String("file-output-dir", "/tmp", "Output directory for file sink (env: PG_FLO_FILE_OUTPUT_DIR)")
 
@@ -130,8 +127,6 @@ func init() {
 
 	// Webhook sink flags
 	webhookWorkerCmd.Flags().String("webhook-url", "", "Webhook URL to send data (env: PG_FLO_WEBHOOK_URL)")
-	webhookWorkerCmd.Flags().Int("webhook-batch-size", 100, "Number of messages to batch before sending (env: PG_FLO_WEBHOOK_BATCH_SIZE)")
-	webhookWorkerCmd.Flags().Int("webhook-retry-max", 3, "Maximum number of retries for failed requests (env: PG_FLO_WEBHOOK_RETRY_MAX)")
 
 	markFlagRequired(webhookWorkerCmd, "webhook-url")
 
