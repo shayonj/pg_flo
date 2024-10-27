@@ -230,6 +230,12 @@ func (s *PostgresSink) WriteBatch(messages []*utils.CDCMessage) error {
 	}
 
 	for _, message := range messages {
+
+		primaryKeyColumn := message.MappedPrimaryKeyColumn
+		if primaryKeyColumn != "" {
+			message.PrimaryKeyColumn = message.MappedPrimaryKeyColumn
+		}
+
 		var err error
 		switch message.Type {
 		case "INSERT":

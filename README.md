@@ -20,7 +20,7 @@
   - Support for multiple data types (integers, floats, strings, timestamps, and booleans)
   - Ability to apply rules selectively to INSERT, UPDATE, or DELETE operations
 - Flexible data routing:
-  - 🔜 Re-route data to different tables (as long as the schema matches)
+  - Re-route data to different tables and remap column names (as long as the schema & type matches)
   - 🔜 Ability to split or duplicate data streams based on custom logic
 - Support for DDL change tracking
 - Resumable streaming from last position

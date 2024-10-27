@@ -31,7 +31,7 @@ func NewTransformRule(table, column string, params map[string]interface{}) (Rule
 		return nil, fmt.Errorf("transform type is required for TransformRule")
 	}
 
-	operations, _ := params["operations"].([]OperationType)
+	operations, _ := params["operations"].([]utils.OperationType)
 	allowEmptyDeletes, _ := params["allow_empty_deletes"].(bool)
 
 	switch transformType {
@@ -43,7 +43,7 @@ func NewTransformRule(table, column string, params map[string]interface{}) (Rule
 		rule.Operations = operations
 		rule.AllowEmptyDeletes = allowEmptyDeletes
 		if len(rule.Operations) == 0 {
-			rule.Operations = []OperationType{OperationInsert, OperationUpdate, OperationDelete}
+			rule.Operations = []utils.OperationType{utils.OperationInsert, utils.OperationUpdate, utils.OperationDelete}
 		}
 		return rule, nil
 	case "mask":
@@ -54,7 +54,7 @@ func NewTransformRule(table, column string, params map[string]interface{}) (Rule
 		rule.Operations = operations
 		rule.AllowEmptyDeletes = allowEmptyDeletes
 		if len(rule.Operations) == 0 {
-			rule.Operations = []OperationType{OperationInsert, OperationUpdate, OperationDelete}
+			rule.Operations = []utils.OperationType{utils.OperationInsert, utils.OperationUpdate, utils.OperationDelete}
 		}
 		return rule, nil
 	default:
@@ -147,7 +147,7 @@ func NewFilterRule(table, column string, params map[string]interface{}) (Rule, e
 		return nil, fmt.Errorf("value parameter is required for FilterRule")
 	}
 
-	operations, _ := params["operations"].([]OperationType)
+	operations, _ := params["operations"].([]utils.OperationType)
 	allowEmptyDeletes, _ := params["allow_empty_deletes"].(bool)
 
 	var condition func(*utils.CDCMessage) bool
@@ -170,7 +170,7 @@ func NewFilterRule(table, column string, params map[string]interface{}) (Rule, e
 	}
 
 	if len(rule.Operations) == 0 {
-		rule.Operations = []OperationType{OperationInsert, OperationUpdate, OperationDelete}
+		rule.Operations = []utils.OperationType{utils.OperationInsert, utils.OperationUpdate, utils.OperationDelete}
 	}
 
 	return rule, nil
@@ -356,7 +356,7 @@ func compareNumericValues(a, b string, operator string) bool {
 
 // Apply applies the transform rule to the provided data
 func (r *TransformRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, error) {
-	if !containsOperation(r.Operations, OperationType(message.Type)) {
+	if !containsOperation(r.Operations, utils.OperationType(message.Type)) {
 		return message, nil
 	}
 
@@ -370,7 +370,7 @@ func (r *TransformRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, err
 
 // Apply applies the filter rule to the provided data
 func (r *FilterRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, error) {
-	if !containsOperation(r.Operations, OperationType(message.Type)) {
+	if !containsOperation(r.Operations, utils.OperationType(message.Type)) {
 		return message, nil
 	}
 
@@ -395,7 +395,7 @@ func (r *FilterRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, error)
 }
 
 // containsOperation checks if the given operation is in the list of operations
-func containsOperation(operations []OperationType, operation OperationType) bool {
+func containsOperation(operations []utils.OperationType, operation utils.OperationType) bool {
 	for _, op := range operations {
 		if op == operation {
 			return true

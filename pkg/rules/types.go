@@ -6,15 +6,6 @@ import (
 	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
-// OperationType represents the type of database operation
-type OperationType string
-
-const (
-	OperationInsert OperationType = "INSERT"
-	OperationUpdate OperationType = "UPDATE"
-	OperationDelete OperationType = "DELETE"
-)
-
 // Rule interface defines the methods that all rules must implement
 type Rule interface {
 	Apply(message *utils.CDCMessage) (*utils.CDCMessage, error)
@@ -25,7 +16,7 @@ type RuleConfig struct {
 	Type              string                 `yaml:"type"`
 	Column            string                 `yaml:"column"`
 	Parameters        map[string]interface{} `yaml:"parameters"`
-	Operations        []OperationType        `yaml:"operations,omitempty"`
+	Operations        []utils.OperationType  `yaml:"operations,omitempty"`
 	AllowEmptyDeletes bool                   `yaml:"allow_empty_deletes,omitempty"`
 }
 
@@ -39,7 +30,7 @@ type TransformRule struct {
 	TableName         string
 	ColumnName        string
 	Transform         func(*utils.CDCMessage) (*utils.CDCMessage, error)
-	Operations        []OperationType
+	Operations        []utils.OperationType
 	AllowEmptyDeletes bool
 }
 
@@ -48,7 +39,7 @@ type FilterRule struct {
 	TableName         string
 	ColumnName        string
 	Condition         func(*utils.CDCMessage) bool
-	Operations        []OperationType
+	Operations        []utils.OperationType
 	AllowEmptyDeletes bool
 }
 

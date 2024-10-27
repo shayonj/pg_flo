@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/pgflonats"
 	"github.com/shayonj/pg_flo/pkg/replicator"
+	"github.com/shayonj/pg_flo/pkg/routing"
 	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/sinks"
 	"github.com/shayonj/pg_flo/pkg/worker"
@@ -100,6 +101,7 @@ func init() {
 	workerCmd.PersistentFlags().String("group", "", "Group name for worker (env: PG_FLO_GROUP)")
 	workerCmd.PersistentFlags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
 	workerCmd.PersistentFlags().String("rules-config", "", "Path to rules configuration file (env: PG_FLO_RULES_CONFIG)")
+	workerCmd.PersistentFlags().String("routing-config", "", "Path to routing configuration file (env: PG_FLO_ROUTING_CONFIG)")
 
 	markPersistentFlagRequired(workerCmd, "group", "nats-url")
 
@@ -221,6 +223,7 @@ func runWorker(cmd *cobra.Command, _ []string) {
 	}
 
 	rulesConfigPath := viper.GetString("rules-config")
+	routingConfigPath := viper.GetString("routing-config")
 	sinkType := cmd.Use
 
 	// Create NATS client
@@ -240,12 +243,23 @@ func runWorker(cmd *cobra.Command, _ []string) {
 		}
 	}
 
+	router := routing.NewRouter()
+	if routingConfigPath != "" {
+		routingConfig, err := loadRoutingConfig(routingConfigPath)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to load routing configuration")
+		}
+		if err := router.LoadRoutes(routingConfig); err != nil {
+			log.Fatal().Err(err).Msg("Failed to load routes")
+		}
+	}
+
 	sink, err := createSink(sinkType)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create sink")
 	}
 
-	w := worker.NewWorker(natsClient, ruleEngine, sink, group)
+	w := worker.NewWorker(natsClient, ruleEngine, router, sink, group)
 
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
@@ -277,6 +291,19 @@ func loadRulesConfig(filePath string) (rules.Config, error) {
 	err = yaml.Unmarshal(data, &config)
 	if err != nil {
 		return config, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	return config, nil
+}
+
+func loadRoutingConfig(filePath string) (map[string]routing.TableRoute, error) {
+	var config map[string]routing.TableRoute
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return config, fmt.Errorf("failed to read routing config file: %w", err)
+	}
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return config, fmt.Errorf("failed to unmarshal routing config: %w", err)
 	}
 	return config, nil
 }
