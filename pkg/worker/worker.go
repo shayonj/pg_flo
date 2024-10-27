@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/pgflonats"
+	"github.com/shayonj/pg_flo/pkg/routing"
 	"github.com/shayonj/pg_flo/pkg/rules"
 	"github.com/shayonj/pg_flo/pkg/sinks"
 	"github.com/shayonj/pg_flo/pkg/utils"
@@ -21,6 +22,7 @@ import (
 type Worker struct {
 	natsClient     *pgflonats.NATSClient
 	ruleEngine     *rules.RuleEngine
+	router         *routing.Router
 	sink           sinks.Sink
 	group          string
 	logger         zerolog.Logger
@@ -37,13 +39,14 @@ func init() {
 	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
 }
 
-// NewWorker creates and returns a new Worker instance with the provided NATS client, rule engine, sink, and group.
-func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, sink sinks.Sink, group string) *Worker {
+// NewWorker creates and returns a new Worker instance with the provided NATS client, rule engine, router, sink, and group.
+func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, router *routing.Router, sink sinks.Sink, group string) *Worker {
 	logger := log.With().Str("component", "worker").Logger()
 
 	return &Worker{
 		natsClient:     natsClient,
 		ruleEngine:     ruleEngine,
+		router:         router,
 		sink:           sink,
 		group:          group,
 		logger:         logger,
@@ -169,6 +172,19 @@ func (w *Worker) processMessage(msg *nats.Msg) error {
 			return nil
 		}
 		cdcMessage = *processedMessage
+	}
+
+	if w.router != nil {
+		routedMessage, err := w.router.ApplyRouting(&cdcMessage)
+		if err != nil {
+			w.logger.Error().Err(err).Msg("Failed to apply routing")
+			return err
+		}
+		if routedMessage == nil {
+			w.logger.Debug().Msg("Message filtered out by routing")
+			return nil
+		}
+		cdcMessage = *routedMessage
 	}
 
 	w.buffer = append(w.buffer, &cdcMessage)

@@ -337,3 +337,47 @@ jobs:
       #     path: |
       #       /tmp/pg_flo.log
       #       /tmp/pg_flo-output/*.jsonl
+
+  routing_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+      - name: Build pg_flo
+        run: make build
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client jq
+      - name: Set up Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+      - name: Run routing integration test
+        env:
+          PG_HOST: localhost
+          PG_PORT: 5433
+          PG_USER: myuser
+          PG_PASSWORD: mypassword
+          PG_DB: mydb
+          TARGET_PG_HOST: localhost
+          TARGET_PG_PORT: 5434
+          TARGET_PG_USER: targetuser
+          TARGET_PG_PASSWORD: targetpassword
+          TARGET_PG_DB: targetdb
+        run: |
+          docker-compose up -d
+          sleep 10
+          ./internal/e2e_routing.sh
+          docker-compose down -v
+      # - name: Upload test logs
+      #   uses: actions/upload-artifact@v3
+      #   if: always()
+      #   with:
+      #     name: routing-test-logs
+      #     path: |
+      #       /tmp/pg_flo.log
+      #       /tmp/pg_flo-output/*.jsonl

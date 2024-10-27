@@ -115,7 +115,7 @@ func TestRuleEngine_LoadRules(t *testing.T) {
 						"type":      "mask",
 						"mask_char": "*",
 					},
-					Operations: []rules.OperationType{rules.OperationInsert, rules.OperationUpdate},
+					Operations: []utils.OperationType{utils.OperationInsert, utils.OperationUpdate},
 				},
 				{
 					Type:   "filter",
@@ -124,7 +124,7 @@ func TestRuleEngine_LoadRules(t *testing.T) {
 						"operator": "gt",
 						"value":    int64(100), // Change this to int64
 					},
-					Operations: []rules.OperationType{rules.OperationDelete},
+					Operations: []utils.OperationType{utils.OperationDelete},
 				},
 			},
 		},
@@ -199,7 +199,7 @@ func TestRuleEngine_ApplyRules_FilterRule(t *testing.T) {
 						"operator": "gt",
 						"value":    int64(100),
 					},
-					Operations: []rules.OperationType{rules.OperationUpdate},
+					Operations: []utils.OperationType{utils.OperationUpdate},
 				},
 			},
 		},

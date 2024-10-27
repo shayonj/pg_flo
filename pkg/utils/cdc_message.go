@@ -29,16 +29,17 @@ func init() {
 
 // CDCMessage represents a full message for Change Data Capture
 type CDCMessage struct {
-	Type             string
-	Schema           string
-	Table            string
-	Columns          []*pglogrepl.RelationMessageColumn
-	NewTuple         *pglogrepl.TupleData
-	OldTuple         *pglogrepl.TupleData
-	PrimaryKeyColumn string
-	LSN              string
-	EmittedAt        time.Time
-	ToastedColumns   map[string]bool
+	Type                   string
+	Schema                 string
+	Table                  string
+	Columns                []*pglogrepl.RelationMessageColumn
+	NewTuple               *pglogrepl.TupleData
+	OldTuple               *pglogrepl.TupleData
+	PrimaryKeyColumn       string
+	LSN                    string
+	EmittedAt              time.Time
+	ToastedColumns         map[string]bool
+	MappedPrimaryKeyColumn string
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface

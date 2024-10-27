@@ -20,7 +20,7 @@
   - Support for multiple data types (integers, floats, strings, timestamps, and booleans)
   - Ability to apply rules selectively to INSERT, UPDATE, or DELETE operations
 - Flexible data routing:
-  - 🔜 Re-route data to different tables (as long as the schema matches)
+  - Re-route data to different tables and remap column names (as long as the schema & type matches)
   - 🔜 Ability to split or duplicate data streams based on custom logic
 - Support for DDL change tracking
 - Resumable streaming from last position
@@ -82,6 +82,7 @@ This setup will start a replicator that captures changes from PostgreSQL and pub
   - [Stream Mode](#stream-mode)
   - [Copy and Stream Mode](#copy-and-stream-mode)
   - [Running the Worker](#running-the-worker)
+- [Message Routing](#message-routing)
 - [Transformation and Filtering Rules](#transformation-and-filtering-rules)
 - [Supported Destinations](#supported-destinations)
 - [How it Works](#how-it-works)
@@ -145,6 +146,35 @@ The worker command remains the same for both modes since it processes messages f
 ```shell
 pg_flo worker <sink_type> [additional_flags]
 ```
+
+## Message Routing
+
+`pg_flo` supports flexible message routing to map source tables and columns to different destinations:
+
+- Map source tables to different destination tables
+- Remap column names while preserving data types
+- Filter operations (INSERT/UPDATE/DELETE) per table
+
+Example configuration:
+
+```yaml
+users:
+  source_table: users
+  destination_table: customers
+  column_mappings:
+    - source: id
+      destination: customer_id
+  operations:
+    - INSERT
+    - UPDATE
+```
+
+```shell
+pg_flo worker postgres \
+  --routing-config /path/to/routing-config.yaml
+```
+
+For detailed documentation and examples, see [Message Routing](pkg/routing/README.md).
 
 ## Transformation and Filtering Rules
 
