@@ -7,11 +7,11 @@
 
 `pg_flo` is the easiest way to move and transform data between PostgreSQL databases. Using PostgreSQL Logical Replication, it enables:
 
-- ✨ Real-time Data Streaming of inserts, updates, deletes, and DDL changes in near real-time
-- 🚀 Fast initial data loads with parallel copy of existing data, followed up continuous replication
-- 🔄 Powerful transformations and filtering of data on-the-fly ([see rules](pkg/rules/README.md))
-- 🎯 Flexible routing to different tables and remapping of columns ([see routing](pkg/routing/README.md))
-- 💪 Support for resumable streaming (deploys), DDL tracking, and more
+- Real-time Data Streaming of inserts, updates, deletes, and DDL changes in near real-time
+- Fast initial data loads with parallel copy of existing data, automatic follow up by continuous replication
+- Powerful transformations and filtering of data on-the-fly ([see rules](pkg/rules/README.md))
+- Flexible routing to different tables and remapping of columns ([see routing](pkg/routing/README.md))
+- Support for resumable streaming (deploys), DDL tracking, and more
 
 ℹ️ `pg_flo` is in active development. The design and architecture is continuously improving. PRs/Issues are very much welcome 🙏
 
