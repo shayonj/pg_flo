@@ -14,7 +14,27 @@ import (
 const (
 	defaultNATSURL = "nats://localhost:4222"
 	envNATSURL     = "PG_FLO_NATS_URL"
+
+	defaultMaxAge   = 24 * time.Hour
+	defaultReplicas = 1
+	defaultReplays  = false
 )
+
+// StreamConfig represents the configuration for a NATS stream
+type StreamConfig struct {
+	MaxAge   time.Duration
+	Replays  bool
+	Replicas int
+}
+
+// DefaultStreamConfig returns a StreamConfig with default values
+func DefaultStreamConfig() StreamConfig {
+	return StreamConfig{
+		MaxAge:   defaultMaxAge,
+		Replays:  defaultReplays,
+		Replicas: defaultReplicas,
+	}
+}
 
 // NATSClient represents a client for interacting with NATS
 type NATSClient struct {
@@ -22,6 +42,7 @@ type NATSClient struct {
 	js          nats.JetStreamContext
 	stream      string
 	stateBucket string
+	config      StreamConfig
 }
 
 // State represents the current state of the replication process
@@ -31,7 +52,15 @@ type State struct {
 }
 
 // NewNATSClient creates a new NATS client with the specified configuration, setting up the connection, main stream, and state bucket.
-func NewNATSClient(url, stream, group string) (*NATSClient, error) {
+func NewNATSClient(url, stream, group string, config StreamConfig) (*NATSClient, error) {
+	if config.MaxAge == 0 {
+		config.MaxAge = defaultMaxAge
+	}
+
+	if config.Replicas == 0 {
+		config.Replicas = defaultReplicas
+	}
+
 	if url == "" {
 		url = os.Getenv(envNATSURL)
 		if url == "" {
@@ -66,13 +95,21 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
 	}
 
-	// Create the main stream
+	// Create the main stream with configurable retention
 	streamConfig := &nats.StreamConfig{
-		Name:      stream,
-		Subjects:  []string{fmt.Sprintf("pgflo.%s", group)},
-		Storage:   nats.FileStorage,
-		Retention: nats.LimitsPolicy,
-		MaxAge:    24 * time.Hour,
+		Name:        stream,
+		Storage:     nats.FileStorage,
+		Retention:   nats.LimitsPolicy,
+		MaxAge:      config.MaxAge,
+		Replicas:    config.Replicas,
+		Discard:     nats.DiscardOld,
+		Subjects:    []string{fmt.Sprintf("pgflo.%s", group)},
+		Description: fmt.Sprintf("pg_flo stream for group %s", group),
+	}
+	if config.Replays {
+		streamConfig.Retention = nats.WorkQueuePolicy
+		streamConfig.MaxMsgs = -1
+
 	}
 	_, err = js.AddStream(streamConfig)
 	if err != nil && !errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
@@ -100,6 +137,7 @@ func NewNATSClient(url, stream, group string) (*NATSClient, error) {
 		js:          js,
 		stream:      stream,
 		stateBucket: stateBucket,
+		config:      config,
 	}, nil
 }
 

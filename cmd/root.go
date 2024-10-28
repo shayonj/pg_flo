@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -65,6 +66,12 @@ var (
 		Short: "Start the worker with webhook sink",
 		Run:   runWorker,
 	}
+
+	replayCmd = &cobra.Command{
+		Use:   "replay-worker",
+		Short: "Replay historical changes",
+		Run:   runReplay,
+	}
 )
 
 func Execute() error {
@@ -94,6 +101,9 @@ func init() {
 	replicatorCmd.Flags().Bool("copy-and-stream", false, "Enable copy and stream mode (env: PG_FLO_COPY_AND_STREAM)")
 	replicatorCmd.Flags().Int("max-copy-workers-per-table", 4, "Maximum number of copy workers per table (env: PG_FLO_MAX_COPY_WORKERS_PER_TABLE)")
 	replicatorCmd.Flags().Bool("track-ddl", false, "Enable tracking of DDL changes (env: PG_FLO_TRACK_DDL)")
+	replicatorCmd.Flags().Duration("max-age", 24*time.Hour, "Maximum age of messages to retain (env: PG_FLO_MAX_AGE)")
+	replicatorCmd.Flags().Bool("enable-replays", false, "Enable replay capability - requires more storage (env: PG_FLO_ENABLE_REPLAYS)")
+	replicatorCmd.Flags().Int("nats-replicas", 1, "Number of stream replicas (env: PG_FLO_NATS_REPLICAS)")
 
 	markFlagRequired(replicatorCmd, "host", "port", "dbname", "user", "password", "group", "nats-url")
 
@@ -133,7 +143,17 @@ func init() {
 	// Add subcommands to worker command
 	workerCmd.AddCommand(stdoutWorkerCmd, fileWorkerCmd, postgresWorkerCmd, webhookWorkerCmd)
 
-	rootCmd.AddCommand(replicatorCmd, workerCmd)
+	// Add replay command
+	replayCmd.Flags().String("start-time", "", "Start time for replay (RFC3339 format)")
+	replayCmd.Flags().String("end-time", "", "End time for replay (RFC3339 format)")
+	replayCmd.Flags().String("group", "", "Group name for worker (env: PG_FLO_GROUP)")
+	replayCmd.Flags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
+	replayCmd.Flags().String("rules-config", "", "Path to rules configuration file (env: PG_FLO_RULES_CONFIG)")
+	replayCmd.Flags().String("routing-config", "", "Path to routing configuration file (env: PG_FLO_ROUTING_CONFIG)")
+
+	markFlagRequired(replayCmd, "start-time", "end-time", "group", "nats-url")
+
+	rootCmd.AddCommand(replicatorCmd, workerCmd, replayCmd)
 }
 
 func initConfig() {
@@ -157,6 +177,7 @@ func initConfig() {
 	bindFlags(fileWorkerCmd)
 	bindFlags(postgresWorkerCmd)
 	bindFlags(webhookWorkerCmd)
+	bindFlags(replayCmd)
 
 	if err := viper.ReadInConfig(); err == nil {
 		fmt.Println("Using config file:", viper.ConfigFileUsed())
@@ -192,7 +213,13 @@ func runReplicator(_ *cobra.Command, _ []string) {
 		log.Fatal().Msg("NATS URL is required")
 	}
 
-	natsClient, err := pgflonats.NewNATSClient(natsURL, fmt.Sprintf("pgflo_%s_stream", config.Group), config.Group)
+	natsConfig := pgflonats.StreamConfig{
+		MaxAge:   viper.GetDuration("max-age"),
+		Replays:  viper.GetBool("enable-replays"),
+		Replicas: viper.GetInt("nats-replicas"),
+	}
+
+	natsClient, err := pgflonats.NewNATSClient(natsURL, fmt.Sprintf("pgflo_%s_stream", config.Group), config.Group, natsConfig)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create NATS client")
 	}
@@ -222,7 +249,8 @@ func runWorker(cmd *cobra.Command, _ []string) {
 	sinkType := cmd.Use
 
 	// Create NATS client
-	natsClient, err := pgflonats.NewNATSClient(natsURL, fmt.Sprintf("pgflo_%s_stream", group), group)
+	natsConfig := pgflonats.DefaultStreamConfig()
+	natsClient, err := pgflonats.NewNATSClient(natsURL, fmt.Sprintf("pgflo_%s_stream", group), group, natsConfig)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create NATS client")
 	}
@@ -350,5 +378,71 @@ func markPersistentFlagRequired(cmd *cobra.Command, flags ...string) {
 		if err := cmd.MarkPersistentFlagRequired(flag); err != nil {
 			fmt.Printf("Error marking persistent flag %s as required: %v\n", flag, err)
 		}
+	}
+}
+
+func runReplay(cmd *cobra.Command, _ []string) {
+	startTimeStr := viper.GetString("start-time")
+	endTimeStr := viper.GetString("end-time")
+
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid start time format")
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid end time format")
+	}
+
+	// Create NATS client with replay config
+	natsConfig := pgflonats.StreamConfig{
+		MaxAge:  viper.GetDuration("max-age"),
+		Replays: viper.GetBool("enable-replays"),
+	}
+
+	natsClient, err := pgflonats.NewNATSClient(
+		viper.GetString("nats-url"),
+		fmt.Sprintf("pgflo_%s_stream", viper.GetString("group")),
+		viper.GetString("group"),
+		natsConfig,
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create NATS client")
+	}
+
+	ruleEngine := rules.NewRuleEngine()
+	if viper.GetString("rules-config") != "" {
+		rulesConfig, err := loadRulesConfig(viper.GetString("rules-config"))
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to load rules configuration")
+		}
+		if err := ruleEngine.LoadRules(rulesConfig); err != nil {
+			log.Fatal().Err(err).Msg("Failed to load rules")
+		}
+	}
+
+	router := routing.NewRouter()
+	if viper.GetString("routing-config") != "" {
+		routingConfig, err := loadRoutingConfig(viper.GetString("routing-config"))
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to load routing configuration")
+		}
+		if err := router.LoadRoutes(routingConfig); err != nil {
+			log.Fatal().Err(err).Msg("Failed to load routes")
+		}
+	}
+
+	sink, err := createSink(cmd.Use)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create sink")
+	}
+
+	w := worker.NewWorker(natsClient, ruleEngine, router, sink, viper.GetString("group"))
+
+	replayWorker := worker.NewReplayWorker(w, startTime, endTime)
+
+	if err := replayWorker.Start(cmd.Context()); err != nil {
+		log.Fatal().Err(err).Msg("Failed to start replay worker")
 	}
 }
