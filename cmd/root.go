@@ -65,6 +65,11 @@ var (
 		Short: "Start the worker with webhook sink",
 		Run:   runWorker,
 	}
+
+	// Version information set by goreleaser
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 func Execute() error {
@@ -134,6 +139,17 @@ func init() {
 	workerCmd.AddCommand(stdoutWorkerCmd, fileWorkerCmd, postgresWorkerCmd, webhookWorkerCmd)
 
 	rootCmd.AddCommand(replicatorCmd, workerCmd)
+
+	// Add version command
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("pg_flo version %s\n", formatVersion())
+		},
+	}
+
+	rootCmd.AddCommand(versionCmd)
 }
 
 func initConfig() {
@@ -351,4 +367,8 @@ func markPersistentFlagRequired(cmd *cobra.Command, flags ...string) {
 			fmt.Printf("Error marking persistent flag %s as required: %v\n", flag, err)
 		}
 	}
+}
+
+func formatVersion() string {
+	return fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)
 }

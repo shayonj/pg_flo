@@ -12,6 +12,11 @@ builds:
     goarch:
       - amd64
       - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/shayonj/pg_flo/cmd.version={{.Version}}
+      - -X github.com/shayonj/pg_flo/cmd.commit={{.Commit}}
+      - -X github.com/shayonj/pg_flo/cmd.date={{.Date}}
     binary: pg_flo
 
 archives:
