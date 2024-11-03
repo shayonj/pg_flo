@@ -3,7 +3,7 @@ before:
     - go mod tidy
 
 builds:
-  - main: ./cmd/pg_flo
+  - main: .
     env:
       - CGO_ENABLED=0
     goos:
@@ -12,6 +12,7 @@ builds:
     goarch:
       - amd64
       - arm64
+    binary: pg_flo
 
 archives:
   - format: tar.gz
