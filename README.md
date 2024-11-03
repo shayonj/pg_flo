@@ -5,37 +5,17 @@
 [![Release](https://img.shields.io/github/v/release/shayonj/pg_flo?sort=semver)](https://github.com/shayonj/pg_flo/releases/latest)
 [![Docker Image](https://img.shields.io/docker/v/shayonj/pg_flo?label=docker&sort=semver)](https://hub.docker.com/r/shayonj/pg_flo/tags)
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Common Use Cases](#common-use-cases)
-- [Quick Setup](#quick-setup)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Configuration](#configuration)
-  - [Quick Start](#quick-start)
-- [Architecture](#architecture)
-  - [Streaming Modes](#streaming-modes)
-  - [Supported Destinations](#supported-destinations)
-- [Features](#features)
-  - [Message Routing](#message-routing)
-  - [Transformation Rules](#transformation-rules)
-- [Scaling](#scaling)
-- [Development](#development)
-- [Contributing](#contributing)
-- [License](#license)
-
-## Overview
-
-`pg_flo` is the easiest way to move and transform data between PostgreSQL databases. Using PostgreSQL Logical Replication, it enables:
-
-- Real-time Data Streaming of inserts, updates, deletes, and DDL changes in near real-time
-- Fast initial data loads with parallel copy of existing data, automatic follow up by continuous replication
-- Powerful transformations and filtering of data on-the-fly ([see rules](pkg/rules/README.md))
-- Flexible routing to different tables and remapping of columns ([see routing](pkg/routing/README.md))
-- Support for resumable streaming (deploys), DDL tracking, and more
+> The easiest way to move and transform data between PostgreSQL databases using Logical Replication.
 
 ℹ️ `pg_flo` is in active development. The design and architecture is continuously improving. PRs/Issues are very much welcome 🙏
+
+## Key Features
+
+- **Real-time Data Streaming** - Capture inserts, updates, deletes, and DDL changes in near real-time
+- **Fast Initial Loads** - Parallel copy of existing data with automatic follow-up continuous replication
+- **Powerful Transformations** - Filter and transform data on-the-fly ([see rules](pkg/rules/README.md))
+- **Flexible Routing** - Route to different tables and remap columns ([see routing](pkg/routing/README.md))
+- **Production Ready** - Supports resumable streaming, DDL tracking, and more
 
 ## Common Use Cases
 
@@ -45,65 +25,47 @@
 - Database migration with zero downtime
 - Event streaming from PostgreSQL
 
-For detailed examples of these use cases, see our [Examples Guide](internal/examples/README.md).
+[View detailed examples →](internal/examples/README.md)
 
-## Quick Setup
+## Quick Start
 
 ### Prerequisites
 
 - Docker
-- PostgreSQL database with logical replication enabled (`wal_level=logical`)
+- PostgreSQL database with `wal_level=logical`
 
-### Installation
-
-The easiest way to run pg_flo is using Docker:
+### 1. Install
 
 ```shell
 docker pull shayonj/pg_flo:latest
 ```
 
-### Configuration
+### 2. Configure
 
-pg_flo can be configured using any of these methods:
+Choose one:
 
-1. Environment variables
-2. YAML configuration file
-3. CLI flags
+- Environment variables
+- YAML configuration file ([example](internal/pg-flo.yaml))
+- CLI flags
 
-For a complete list of configuration options, see our [example configuration file](internal/pg-flo.yaml).
-
-### Quick Start
-
-Here's a minimal example to get started:
+### 3. Run
 
 ```shell
-# Start NATS server with JetStream configuration
+# Start NATS server
 docker run -d --name pg_flo_nats \
   --network host \
   -v /path/to/nats-server.conf:/etc/nats/nats-server.conf \
   nats:latest \
   -c /etc/nats/nats-server.conf
 
-# Start replicator with config file
+# Start replicator (using config file)
 docker run -d --name pg_flo_replicator \
   --network host \
   -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
   shayonj/pg_flo:latest \
   replicator --config /etc/pg_flo/config.yaml
 
-# Or start replicator with environment variables
-docker run -d --name pg_flo_replicator \
-  --network host \
-  -e PG_FLO_HOST=localhost \
-  -e PG_FLO_DBNAME=myapp \
-  -e PG_FLO_USER=replicator \
-  -e PG_FLO_PASSWORD=secret \
-  -e PG_FLO_GROUP=users \
-  -e PG_FLO_TABLES=users \
-  shayonj/pg_flo:latest \
-  replicator --nats-url nats://localhost:4222
-
-# Start worker with postgres as the destination
+# Start worker
 docker run -d --name pg_flo_worker \
   --network host \
   -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
@@ -111,18 +73,7 @@ docker run -d --name pg_flo_worker \
   worker postgres --config /etc/pg_flo/config.yaml
 ```
 
-> **Note**:
->
-> - pg_flo needs network access to both PostgreSQL and NATS
-> - The examples above use `--network host` for local development
-> - For production, we recommend using proper container networking (Docker networks, Kubernetes, etc.)
-> - NATS server must be configured with JetStream enabled and appropriate message size limits
-> - See our [example configuration](internal/pg-flo.yaml) for all available options for setting up pg_flo
-> - See our [example NATS configuration](internal/nats-server.conf) for NATS server settings
-
-### Example Configuration File
-
-Create a `config.yaml` file:
+#### Example Configuration (config.yaml)
 
 ```yaml
 # Replicator settings
@@ -135,7 +86,7 @@ group: "users"
 tables:
   - "users"
 
-# Worker settings (for postgres sink)
+# Worker settings (postgres sink)
 target-host: "dest-db"
 target-dbname: "myapp"
 target-user: "writer"
@@ -145,76 +96,67 @@ target-password: "secret"
 nats-url: "nats://localhost:4222"
 ```
 
-For a complete list of configuration options, see our [example configuration file](internal/pg-flo.yaml).
+[View full configuration options →](internal/pg-flo.yaml)
 
-The rest of this documentation uses `pg_flo` commands directly for clarity. When running via Docker, simply prefix the commands with `docker run shayonj/pg_flo:latest`.
+## Core Concepts
 
-## Architecture
+### Architecture
 
-pg_flo operates using two main components:
+pg_flo uses two main components:
 
-- **Replicator**: Captures changes from PostgreSQL using logical replication
-- **Worker**: Processes and routes changes to destinations through NATS
+- **Replicator**: Captures PostgreSQL changes via logical replication
+- **Worker**: Processes and routes changes through NATS
 
-For a detailed explanation of how pg_flo works internally, including:
-
-- Publication and replication slot management
-- Initial bulk copy process
-- Streaming changes
-- Message processing and transformation
-- State management
-
-See our [How it Works](internal/how-it-works.md) guide.
+[Learn how it works →](internal/how-it-works.md)
 
 ### Groups
 
-The `group` parameter is crucial for:
+Groups are used to:
 
-- Identifying replication processes
-- Isolating replication slots and publications
-- Running multiple instances on the same database
-- Maintaining state for resumability
-- Enabling parallel processing
-
-Example:
+- Identify replication processes
+- Isolate replication slots and publications
+- Run multiple instances on same database
+- Maintain state for resumability
+- Enable parallel processing
 
 ```shell
-# Replicate users and orders tables
+# Example: Separate groups for different tables
 pg_flo replicator --group users_orders --tables users,orders
 
-# Replicate products table separately
 pg_flo replicator --group products --tables products
 ```
 
 ### Streaming Modes
 
-1. **Stream Mode** (default)
+1. **Stream Only** (default)
 
-   ```shell
-   pg_flo replicator
-   ```
+```shell
+pg_flo replicator
+```
 
-2. **Copy and Stream Mode**
-   ```shell
-   pg_flo replicator --copy-and-stream --max-copy-workers-per-table 4
-   ```
+2. **Copy and Stream**
 
-### Supported Destinations
+```shell
+pg_flo replicator --copy-and-stream --max-copy-workers-per-table 4
+```
 
-- **stdout**: Output to console
-- **file**: Write to files
-- **postgres**: Replicate to another database
-- **webhook**: Send to HTTP endpoints
+### Destinations
 
-For details, see [Supported Destinations](pkg/sinks/README.md).
+- **stdout**: Console output
+- **file**: File writing
+- **postgres**: Database replication
+- **webhook**: HTTP endpoints
 
-## Features
+[View destination details →](pkg/sinks/README.md)
+
+## Advanced Features
 
 ### Message Routing
 
-Route and transform data between tables:
+Routing configuration is defined in a separate YAML file:
 
 ```yaml
+# routing.yaml
 users:
   source_table: users
   destination_table: customers
@@ -223,63 +165,64 @@ users:
       destination: customer_id
 ```
 
-See [Message Routing](pkg/routing/README.md) for more.
+```shell
+# Apply routing configuration
+pg_flo worker postgres --routing-config /path/to/routing.yaml
+```
+
+[Learn about routing →](pkg/routing/README.md)
 
 ### Transformation Rules
 
-Apply data transformations during replication:
+Rules are defined in a separate YAML file:
+
+```yaml
+# rules.yaml
+users:
+  - type: exclude_columns
+    columns: [password, ssn]
+  - type: mask_columns
+    columns: [email]
+```
 
 ```shell
+# Apply transformation rules
 pg_flo worker file --rules-config /path/to/rules.yaml
 ```
 
-See [Transformation Rules](pkg/rules/README.md) for available options.
+[View transformation options →](pkg/rules/README.md)
 
-## Scaling
+### Combined Example
 
-To maintain the correct order of data changes as they occurred in the source database, it's recommended to run a single worker instance per group. If you need to replicate different tables or sets of tables independently at a faster rate, you can use the `--group` parameter to create separate groups for each table set.
+```shell
+pg_flo worker postgres --config /etc/pg_flo/config.yaml --routing-config routing.yaml --rules-config rules.yaml
+```
 
-**Steps to Scale Using Groups:**
+## Scaling Guide
 
-1. **Define Groups**: Assign a unique group name to each set of tables you want to replicate independently using the `--group` parameter.
+Best practices:
 
-2. **Start a Replicator for Each Group**: Run the replicator for each group to capture changes for its respective tables.
+- Run one worker per group
+- Use groups to replicate different tables independently
+- Scale horizontally using multiple groups
 
-   ```shell
-   pg_flo replicator --group group_name --tables table1,table2
-   ```
+Example scaling setup:
 
-3. **Run a Worker for Each Group**: Start a worker for each group to process the data changes.
+```shell
+# Group: sales
+pg_flo replicator --group sales --tables sales
+pg_flo worker postgres --group sales
 
-   ```shell
-   pg_flo worker <sink_type> --group group_name [additional_flags]
-   ```
-
-**Example:**
-
-If you have two sets of tables, `sales` and `inventory`, you can set up two groups:
-
-- Group `sales`:
-
-  ```shell
-  pg_flo replicator --group sales --tables sales
-  pg_flo worker postgres --group sales
-  ```
-
-- Group `inventory`:
-
-  ```shell
-  pg_flo replicator --group inventory --tables inventory
-  pg_flo worker postgres --group inventory
-  ```
+# Group: inventory
+pg_flo replicator --group inventory --tables inventory
+pg_flo worker postgres --group inventory
+```
 
 ## Limits and Considerations
 
-- NATS message size limit: 8MB (configurable)
-- Single worker per group recommended
-- PostgreSQL logical replication prerequisites
-
-For details, see [Limits and Considerations](#limits-and-considerations).
+- NATS message size: 8MB (configurable)
+- One worker per group recommended
+- PostgreSQL logical replication prerequisites required
 
 ## Development
 
@@ -288,7 +231,7 @@ make build
 make test
 make lint
 
-# Run end-to-end tests
+# E2E tests
 ./internal/scripts/e2e_local.sh
 ```
 
@@ -298,4 +241,4 @@ Contributions welcome! Please open an issue or submit a pull request.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) file.
+Apache License 2.0. [View license →](LICENSE)
