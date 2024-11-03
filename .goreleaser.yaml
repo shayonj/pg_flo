@@ -3,7 +3,8 @@ before:
     - go mod tidy
 
 builds:
-  - env:
+  - main: ./cmd/pg_flo
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -11,9 +12,6 @@ builds:
     goarch:
       - amd64
       - arm64
-    main: ./cmd/pg_flo
-    ldflags:
-      - -s -w -X main.version={{.Version}}
 
 archives:
   - format: tar.gz
@@ -33,5 +31,3 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^ci:"
-      - Merge pull request
-      - Merge branch

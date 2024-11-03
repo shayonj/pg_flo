@@ -1,23 +1,40 @@
-name: Docker
+name: Release and Docker
 
 on:
   push:
     tags:
       - "v*"
-    branches:
-      - main
 
-env:
-  REGISTRY: docker.io
-  IMAGE_NAME: shayonj/pg_flo
+permissions:
+  contents: write
+  packages: write
 
 jobs:
-  build-and-push:
+  goreleaser:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    needs: goreleaser
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,9 +55,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: docker.io/shayonj/pg_flo
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
