@@ -5,14 +5,6 @@ source "$(dirname "$0")/e2e_common.sh"
 
 WEBHOOK_URL="https://deep-article-49.webhook.cool"
 
-setup_docker() {
-  rm -Rf /tmp/pg*
-  log "Setting up Docker environment..."
-  docker compose down -v
-  docker compose up -d
-  success "Docker environment is set up"
-}
-
 create_users() {
   log "Creating initial test table..."
   run_sql "DROP TABLE IF EXISTS public.users;"

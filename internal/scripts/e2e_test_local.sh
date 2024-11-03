@@ -7,8 +7,8 @@ setup_docker() {
   pkill -9 "pg_flo" || true
   rm -Rf /tmp/pg*
   log "Setting up Docker environment..."
-  docker compose down -v
-  docker compose up -d
+  docker compose -f internal/docker-compose.yml down -v
+  docker compose -f internal/docker-compose.yml up -d
   success "Docker environment is set up"
 }
 
@@ -31,15 +31,15 @@ trap cleanup EXIT
 
 make build
 
-setup_docker
+# setup_docker
 
-log "Running e2e routing tests..."
-if CI=false ./internal/scripts/e2e_routing.sh; then
-  success "Original e2e tests completed successfully"
-else
-  error "Original e2e tests failed"
-  exit 1
-fi
+# log "Running e2e routing tests..."
+# if CI=false ./internal/scripts/e2e_routing.sh; then
+#   success "Original e2e tests completed successfully"
+# else
+#   error "Original e2e tests failed"
+#   exit 1
+# fi
 
 # setup_docker
 
@@ -51,15 +51,15 @@ fi
 #   exit 1
 # fi
 
-# setup_docker
+setup_docker
 
-# log "Running e2e copy & stream tests..."
-# if CI=false ./internal/scripts/e2e_multi_tenant.sh; then
-#   success "Original e2e tests completed successfully"
-# else
-#   error "Original e2e tests failed"
-#   exit 1
-# fi
+log "Running e2e copy & stream tests..."
+if CI=false ./internal/scripts/e2e_multi_tenant.sh; then
+  success "Original e2e tests completed successfully"
+else
+  error "Original e2e tests failed"
+  exit 1
+fi
 
 # setup_docker
 

@@ -36,11 +36,12 @@ jobs:
           PG_PASSWORD: mypassword
           PG_DB: mydb
           CI: true
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_copy_and_stream.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -75,11 +76,12 @@ jobs:
           PG_USER: myuser
           PG_PASSWORD: mypassword
           PG_DB: mydb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_test_stream.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -114,11 +116,12 @@ jobs:
           PG_USER: myuser
           PG_PASSWORD: mypassword
           PG_DB: mydb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_resume.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -153,11 +156,12 @@ jobs:
           PG_USER: myuser
           PG_PASSWORD: mypassword
           PG_DB: mydb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_transform_filter.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -192,11 +196,12 @@ jobs:
           PG_USER: myuser
           PG_PASSWORD: mypassword
           PG_DB: mydb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_ddl.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -236,11 +241,12 @@ jobs:
           TARGET_PG_USER: targetuser
           TARGET_PG_PASSWORD: targetpassword
           TARGET_PG_DB: targetdb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_postgres.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -280,11 +286,12 @@ jobs:
           TARGET_PG_USER: targetuser
           TARGET_PG_PASSWORD: targetpassword
           TARGET_PG_DB: targetdb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_postgres_data_type.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -324,11 +331,12 @@ jobs:
           TARGET_PG_USER: targetuser
           TARGET_PG_PASSWORD: targetpassword
           TARGET_PG_DB: targetdb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_multi_tenant.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()
@@ -368,11 +376,12 @@ jobs:
           TARGET_PG_USER: targetuser
           TARGET_PG_PASSWORD: targetpassword
           TARGET_PG_DB: targetdb
+        working-directory: .
         run: |
-          docker-compose up -d
+          docker-compose -f internal/docker-compose.yml up -d
           sleep 10
           ./internal/scripts/e2e_routing.sh
-          docker-compose down -v
+          docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3
       #   if: always()

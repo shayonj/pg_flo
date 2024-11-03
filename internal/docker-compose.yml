@@ -40,7 +40,7 @@ services:
     container_name: pg_flo_nats
     command: ["-c", "/etc/nats/nats-server.conf"]
     volumes:
-      - ./internal/nats-server.conf:/etc/nats/nats-server.conf
+      - ./nats-server.conf:/etc/nats/nats-server.conf
       - nats_data:/data
     ports:
       - "4222:4222"
