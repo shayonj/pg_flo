@@ -3,6 +3,26 @@
 [![CI](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml)
 [![Integration](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml)
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Common Use Cases](#common-use-cases)
+- [Quick Setup](#quick-setup)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Configuration](#configuration)
+  - [Quick Start](#quick-start)
+- [Architecture](#architecture)
+  - [Streaming Modes](#streaming-modes)
+  - [Supported Destinations](#supported-destinations)
+- [Features](#features)
+  - [Message Routing](#message-routing)
+  - [Transformation Rules](#transformation-rules)
+- [Scaling](#scaling)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Overview
 
 `pg_flo` is the easiest way to move and transform data between PostgreSQL databases. Using PostgreSQL Logical Replication, it enables:
@@ -25,56 +45,120 @@
 
 For detailed examples of these use cases, see our [Examples Guide](internal/examples/README.md).
 
-## Quick setup
+## Quick Setup
+
+### Prerequisites
+
+- Docker
+- PostgreSQL database with logical replication enabled (`wal_level=logical`)
 
 ### Installation
 
-```shell
-go get https://github.com/shayonj/pg_flo.git
-```
-
-### Quick Start
+The easiest way to run pg_flo is using Docker:
 
 ```shell
-# Start replicator
-pg_flo replicator \
-  --host source-db \
-  --nats-url nats://localhost:4222 \
-  --dbname myapp \
-  --user replicator \
-  --group users \
-  --tables users
-
-# Start worker
-pg_flo worker postgres \
-  --group users \
-  --target-host dest-db \
-  --nats-url nats://localhost:4222 \
+docker pull shayonj/pg_flo:latest
 ```
 
 ### Configuration
 
-Configure `pg_flo` using any of these methods:
+pg_flo can be configured using any of these methods:
 
-1. CLI flags
-2. YAML configuration file (default: `$HOME/.pg_flo.yaml`)
-3. Environment variables
+1. Environment variables
+2. YAML configuration file
+3. CLI flags
 
-For all configuration options, see our [example configuration file](internal/pg-flo.yaml).
+For a complete list of configuration options, see our [example configuration file](internal/pg-flo.yaml).
 
-#### Sensitive Data
+### Quick Start
 
-For passwords and sensitive data, use environment variables:
+Here's a minimal example to get started:
 
 ```shell
-# Source database
-export PG_FLO_PASSWORD=your_source_password
-export PG_FLO_USER=your_source_user
+# Start NATS server
+docker run -d --name pg_flo_nats \
+  --network host \
+  nats:latest
 
-# Target database (if using postgres sink)
-export PG_FLO_TARGET_PASSWORD=your_target_password
-export PG_FLO_TARGET_USER=your_target_user
+# Start replicator with config file
+docker run -d --name pg_flo_replicator \
+  --network host \
+  -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
+  shayonj/pg_flo:latest \
+  replicator --config /etc/pg_flo/config.yaml
+
+# Or start replicator with environment variables
+docker run -d --name pg_flo_replicator \
+  --network host \
+  -e PG_FLO_HOST=localhost \
+  -e PG_FLO_DBNAME=myapp \
+  -e PG_FLO_USER=replicator \
+  -e PG_FLO_PASSWORD=secret \
+  -e PG_FLO_GROUP=users \
+  -e PG_FLO_TABLES=users \
+  shayonj/pg_flo:latest \
+  replicator --nats-url nats://localhost:4222
+
+# Start worker with postgres as the destination
+docker run -d --name pg_flo_worker \
+  --network host \
+  -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
+  shayonj/pg_flo:latest \
+  worker postgres --config /etc/pg_flo/config.yaml
 ```
+
+> **Note**:
+>
+> - pg_flo needs network access to both PostgreSQL and NATS
+> - The examples above use `--network host` for local development
+> - For production, we recommend using proper container networking (Docker networks, Kubernetes, etc.)
+> - See our [example configuration](internal/pg-flo.yaml) for all available options
+
+### Example Configuration File
+
+Create a `config.yaml` file:
+
+```yaml
+# Replicator settings
+host: "localhost"
+port: 5432
+dbname: "myapp"
+user: "replicator"
+password: "secret"
+group: "users"
+tables:
+  - "users"
+
+# Worker settings (for postgres sink)
+target-host: "dest-db"
+target-dbname: "myapp"
+target-user: "writer"
+target-password: "secret"
+
+# Common settings
+nats-url: "nats://localhost:4222"
+```
+
+For a complete list of configuration options, see our [example configuration file](internal/pg-flo.yaml).
+
+The rest of this documentation uses `pg_flo` commands directly for clarity. When running via Docker, simply prefix the commands with `docker run shayonj/pg_flo:latest`.
+
+## Architecture
+
+pg_flo operates using two main components:
+
+- **Replicator**: Captures changes from PostgreSQL using logical replication
+- **Worker**: Processes and routes changes to destinations through NATS
+
+For a detailed explanation of how pg_flo works internally, including:
+
+- Publication and replication slot management
+- Initial bulk copy process
+- Streaming changes
+- Message processing and transformation
+- State management
+
+See our [How it Works](internal/how-it-works.md) guide.
 
 ### Groups
 
@@ -95,23 +179,6 @@ pg_flo replicator --group users_orders --tables users,orders
 # Replicate products table separately
 pg_flo replicator --group products --tables products
 ```
-
-## Architecture
-
-pg_flo operates using two main components:
-
-- **Replicator**: Captures changes from PostgreSQL using logical replication
-- **Worker**: Processes and routes changes to destinations through NATS
-
-For a detailed explanation of how pg_flo works internally, including:
-
-- Publication and replication slot management
-- Initial bulk copy process
-- Streaming changes
-- Message processing and transformation
-- State management
-
-See our [How it Works](internal/how-it-works.md) guide.
 
 ### Streaming Modes
 
