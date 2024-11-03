@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/ci.yml)
 [![Integration](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/shayonj/pg_flo/actions/workflows/integration.yml)
-[![Release](https://img.shields.io/github/v/release/shayonj/pg_flo?sort=semver)](https://github.com/shayonj/pg_flo/releases/latest)
-[![Docker Image](https://img.shields.io/docker/v/shayonj/pg_flo?label=docker&sort=semver)](https://hub.docker.com/r/shayonj/pg_flo/tags)
+[![Release](https://img.shields.io/github/v/release/shayonj/pg_flo?style=flat&color=#959DA5&sort=semver)](https://github.com/shayonj/pg_flo/releases/latest)
+[![Docker Image](https://img.shields.io/docker/v/shayonj/pg_flo?style=flat&label=docker&color=#959DA5&label=docker&sort=semver)](https://hub.docker.com/r/shayonj/pg_flo/tags)
 
 > The easiest way to move and transform data between PostgreSQL databases using Logical Replication.
 
