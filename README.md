@@ -77,10 +77,12 @@ For a complete list of configuration options, see our [example configuration fil
 Here's a minimal example to get started:
 
 ```shell
-# Start NATS server
+# Start NATS server with JetStream configuration
 docker run -d --name pg_flo_nats \
   --network host \
-  nats:latest
+  -v /path/to/nats-server.conf:/etc/nats/nats-server.conf \
+  nats:latest \
+  -c /etc/nats/nats-server.conf
 
 # Start replicator with config file
 docker run -d --name pg_flo_replicator \
@@ -114,7 +116,9 @@ docker run -d --name pg_flo_worker \
 > - pg_flo needs network access to both PostgreSQL and NATS
 > - The examples above use `--network host` for local development
 > - For production, we recommend using proper container networking (Docker networks, Kubernetes, etc.)
-> - See our [example configuration](internal/pg-flo.yaml) for all available options
+> - NATS server must be configured with JetStream enabled and appropriate message size limits
+> - See our [example configuration](internal/pg-flo.yaml) for all available options for setting up pg_flo
+> - See our [example NATS configuration](internal/nats-server.conf) for NATS server settings
 
 ### Example Configuration File
 
