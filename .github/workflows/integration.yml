@@ -425,7 +425,7 @@ jobs:
         run: |
           docker-compose -f internal/docker-compose.yml up -d
           sleep 10
-          ./internal/scripts/e2e_copy.sh
+          ./internal/scripts/e2e_copy_only.sh
           docker-compose -f internal/docker-compose.yml down -v
       # - name: Upload test logs
       #   uses: actions/upload-artifact@v3

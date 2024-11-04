@@ -66,7 +66,7 @@ start_pg_flo_copy_only() {
     --schema "public" \
     --nats-url "$NATS_URL" \
     --copy \
-    --max-copy-workers-per-table 4 \
+    --max-copy-workers-per-table 10 \
     >"$pg_flo_LOG" 2>&1 &
   pg_flo_PID=$!
   log "pg_flo started with PID: $pg_flo_PID"
