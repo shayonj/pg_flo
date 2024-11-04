@@ -84,7 +84,21 @@ pg_flo worker postgres \
   # ... other postgres connection flags
 ```
 
-## Initial Load with Streaming
+## Initial Load Options
+
+### Copy Only (One-time Data Copy)
+
+Copy existing data without streaming changes:
+
+```bash
+pg_flo replicator \
+  --copy \
+  --max-copy-workers-per-table 4 \
+  --group initial_load \
+  # ... other connection flags
+```
+
+### Copy and Stream
 
 Perform parallel initial data load followed by continuous streaming:
 

@@ -8,7 +8,7 @@ import (
 )
 
 // NewReplicator creates a new Replicator based on the configuration
-func NewReplicator(config Config, natsClient *pgflonats.NATSClient, copyAndStream bool, maxCopyWorkersPerTable int) (Replicator, error) {
+func NewReplicator(config Config, natsClient *pgflonats.NATSClient, copyAndStream bool, copyOnly bool, maxCopyWorkersPerTable int) (Replicator, error) {
 	replicationConn := NewReplicationConnection(config)
 	if err := replicationConn.Connect(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to connect to database for replication: %v", err)
@@ -31,6 +31,18 @@ func NewReplicator(config Config, natsClient *pgflonats.NATSClient, copyAndStrea
 		if err != nil {
 			return nil, fmt.Errorf("failed to create DDL replicator: %v", err)
 		}
+	}
+
+	if copyOnly {
+		copyOnlyReplicator := &CopyAndStreamReplicator{
+			BaseReplicator:         *baseReplicator,
+			MaxCopyWorkersPerTable: maxCopyWorkersPerTable,
+			CopyOnly:               true,
+		}
+		if ddlReplicator != nil {
+			copyOnlyReplicator.DDLReplicator = *ddlReplicator
+		}
+		return copyOnlyReplicator, nil
 	}
 
 	if copyAndStream {
