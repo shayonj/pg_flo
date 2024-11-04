@@ -24,6 +24,7 @@ type CopyAndStreamReplicator struct {
 	BaseReplicator
 	MaxCopyWorkersPerTable int
 	DDLReplicator          DDLReplicator
+	CopyOnly               bool
 }
 
 // StartReplication begins the replication process.
@@ -33,12 +34,14 @@ func (r *CopyAndStreamReplicator) StartReplication() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	if err := r.BaseReplicator.CreatePublication(); err != nil {
-		return fmt.Errorf("failed to create publication: %v", err)
-	}
+	if !r.CopyOnly {
+		if err := r.BaseReplicator.CreatePublication(); err != nil {
+			return fmt.Errorf("failed to create publication: %v", err)
+		}
 
-	if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
-		return fmt.Errorf("failed to create replication slot: %v", err)
+		if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
+			return fmt.Errorf("failed to create replication slot: %v", err)
+		}
 	}
 
 	// Start DDL replication with its own cancellable context and wait group
@@ -69,6 +72,12 @@ func (r *CopyAndStreamReplicator) StartReplication() error {
 	if copyErr := r.ParallelCopy(ctx); copyErr != nil {
 		return fmt.Errorf("failed to perform parallel copy: %v", copyErr)
 	}
+
+	if r.CopyOnly {
+		r.Logger.Info().Msg("Copy-only mode: finished copying data")
+		return nil
+	}
+
 	startLSN := r.BaseReplicator.LastLSN
 
 	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Starting replication from LSN")

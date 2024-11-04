@@ -96,7 +96,9 @@ func init() {
 	replicatorCmd.Flags().String("schema", "public", "PostgreSQL schema (env: PG_FLO_SCHEMA)")
 	replicatorCmd.Flags().StringSlice("tables", []string{}, "Tables to replicate (env: PG_FLO_TABLES)")
 	replicatorCmd.Flags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
-	replicatorCmd.Flags().Bool("copy-and-stream", false, "Enable copy and stream mode (env: PG_FLO_COPY_AND_STREAM)")
+	replicatorCmd.Flags().Bool("stream", false, "Enable stream mode (default if no mode specified)")
+	replicatorCmd.Flags().Bool("copy-and-stream", false, "Enable copy and stream mode")
+	replicatorCmd.Flags().Bool("copy", false, "Enable copy mode without streaming")
 	replicatorCmd.Flags().Int("max-copy-workers-per-table", 4, "Maximum number of copy workers per table (env: PG_FLO_MAX_COPY_WORKERS_PER_TABLE)")
 	replicatorCmd.Flags().Bool("track-ddl", false, "Enable tracking of DDL changes (env: PG_FLO_TRACK_DDL)")
 
@@ -213,10 +215,28 @@ func runReplicator(_ *cobra.Command, _ []string) {
 		log.Fatal().Err(err).Msg("Failed to create NATS client")
 	}
 
+	stream := viper.GetBool("stream")
 	copyAndStream := viper.GetBool("copy-and-stream")
+	copy := viper.GetBool("copy")
+
+	modesSelected := 0
+	if stream {
+		modesSelected++
+	}
+	if copyAndStream {
+		modesSelected++
+	}
+	if copy {
+		modesSelected++
+	}
+
+	if modesSelected > 1 {
+		log.Fatal().Msg("Cannot specify multiple modes: use --stream, --copy-and-stream, or --copy")
+	}
+
 	maxCopyWorkersPerTable := viper.GetInt("max-copy-workers-per-table")
 
-	rep, err := replicator.NewReplicator(config, natsClient, copyAndStream, maxCopyWorkersPerTable)
+	rep, err := replicator.NewReplicator(config, natsClient, copyAndStream, copy, maxCopyWorkersPerTable)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create replicator")
 	}
