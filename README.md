@@ -129,12 +129,21 @@ pg_flo replicator --group products --tables products
 ### Streaming Modes
 
 1. **Stream Only** (default)
+   - Real-time streaming of changes
 
 ```shell
-pg_flo replicator
+pg_flo replicator --stream
 ```
 
-2. **Copy and Stream**
+2. **Copy Only**
+   - One-time parallel copy of existing data
+
+```shell
+pg_flo replicator --copy --max-copy-workers-per-table 4
+```
+
+3. **Copy and Stream**
+   - Initial parallel copy followed by continuous streaming
 
 ```shell
 pg_flo replicator --copy-and-stream --max-copy-workers-per-table 4

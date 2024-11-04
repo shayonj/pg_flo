@@ -217,7 +217,7 @@ func runReplicator(_ *cobra.Command, _ []string) {
 
 	stream := viper.GetBool("stream")
 	copyAndStream := viper.GetBool("copy-and-stream")
-	copy := viper.GetBool("copy")
+	copyMode := viper.GetBool("copy")
 
 	modesSelected := 0
 	if stream {
@@ -226,7 +226,7 @@ func runReplicator(_ *cobra.Command, _ []string) {
 	if copyAndStream {
 		modesSelected++
 	}
-	if copy {
+	if copyMode {
 		modesSelected++
 	}
 
@@ -236,7 +236,7 @@ func runReplicator(_ *cobra.Command, _ []string) {
 
 	maxCopyWorkersPerTable := viper.GetInt("max-copy-workers-per-table")
 
-	rep, err := replicator.NewReplicator(config, natsClient, copyAndStream, copy, maxCopyWorkersPerTable)
+	rep, err := replicator.NewReplicator(config, natsClient, copyAndStream, copyMode, maxCopyWorkersPerTable)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create replicator")
 	}
