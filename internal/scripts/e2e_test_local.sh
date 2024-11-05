@@ -33,6 +33,16 @@ make build
 
 # setup_docker
 
+setup_docker
+
+log "Running e2e order tests..."
+if CI=false ruby ./internal/scripts/e2e_order_test.rb; then
+  success "Original e2e tests completed successfully"
+else
+  error "Original e2e tests failed"
+  exit 1
+fi
+
 # log "Running e2e routing tests..."
 # if CI=false ./internal/scripts/e2e_routing.sh; then
 #   success "Original e2e tests completed successfully"
@@ -51,15 +61,15 @@ make build
 #   exit 1
 # fi
 
-setup_docker
+# setup_docker
 
-log "Running e2e copy only tests..."
-if CI=false ./internal/scripts/e2e_copy_only.sh; then
-  success "Original e2e tests completed successfully"
-else
-  error "Original e2e tests failed"
-  exit 1
-fi
+# log "Running e2e copy only tests..."
+# if CI=false ./internal/scripts/e2e_copy_only.sh; then
+#   success "Original e2e tests completed successfully"
+# else
+#   error "Original e2e tests failed"
+#   exit 1
+# fi
 
 # setup_docker
 
