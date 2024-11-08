@@ -213,7 +213,7 @@ func (w *Worker) flushBuffer() error {
 		return err
 	}
 
-	state.LastProcessedSeq = w.lastSavedState
+	state.LastProcessedSeq[w.group] = w.lastSavedState
 	if err := w.natsClient.SaveState(state); err != nil {
 		w.logger.Error().Err(err).Msg("Failed to save state")
 		return err

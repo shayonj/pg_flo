@@ -27,7 +27,7 @@ type NATSClient struct {
 // State represents the current state of the replication process
 type State struct {
 	LSN              pglogrepl.LSN `json:"lsn"`
-	LastProcessedSeq uint64        `json:"last_processed_seq"`
+	LastProcessedSeq map[string]uint64
 }
 
 // NewNATSClient creates a new NATS client with the specified configuration, setting up the connection, main stream, and state bucket.
@@ -148,7 +148,7 @@ func (nc *NATSClient) GetState() (State, error) {
 	entry, err := kv.Get("state")
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
-			initialState := State{LastProcessedSeq: 0}
+			initialState := State{LastProcessedSeq: make(map[string]uint64)}
 			// Try to create initial state
 			if err := nc.SaveState(initialState); err != nil {
 				// If SaveState fails because the key already exists, fetch it again
@@ -174,6 +174,9 @@ func (nc *NATSClient) GetState() (State, error) {
 		return State{}, fmt.Errorf("failed to unmarshal state: %v", err)
 	}
 
+	if state.LastProcessedSeq == nil {
+		state.LastProcessedSeq = make(map[string]uint64)
+	}
 	return state, nil
 }
 

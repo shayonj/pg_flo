@@ -33,15 +33,13 @@ make build
 
 # setup_docker
 
-setup_docker
-
-log "Running e2e order tests..."
-if CI=false ruby ./internal/scripts/e2e_order_test.rb; then
-  success "Original e2e tests completed successfully"
-else
-  error "Original e2e tests failed"
-  exit 1
-fi
+# log "Running e2e order tests..."
+# if CI=false ruby ./internal/scripts/e2e_order_test.rb; then
+#   success "Original e2e tests completed successfully"
+# else
+#   error "Original e2e tests failed"
+#   exit 1
+# fi
 
 # log "Running e2e routing tests..."
 # if CI=false ./internal/scripts/e2e_routing.sh; then
@@ -91,16 +89,16 @@ fi
 #   exit 1
 # fi
 
-# setup_docker
+setup_docker
 
 # Run new e2e resume test
-# log "Running new e2e resume test..."
-# if ./internal/scripts/e2e_resume.sh; then
-#   success "E2E resume test completed successfully"
-# else
-#   error "E2E resume test failed"
-#   exit 1
-# fi
+log "Running new e2e resume test..."
+if ruby ./internal/scripts/e2e_resume_test.rb; then
+  success "E2E resume test completed successfully"
+else
+  error "E2E resume test failed"
+  exit 1
+fi
 
 # setup_docker
 
