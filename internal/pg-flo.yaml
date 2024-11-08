@@ -19,6 +19,7 @@ track-ddl: false # Enable tracking of DDL changes (env: PG_FLO_TRACK_DDL)
 nats-url: "nats://localhost:4222" # NATS server URL (env: PG_FLO_NATS_URL)
 
 # Worker settings
+batch-size: 1000 # Number of messages to process in a batch (env: PG_FLO_BATCH_SIZE)
 rules-config: "/path/to/rules.yaml" # Path to rules configuration file (env: PG_FLO_RULES_CONFIG)
 routing-config: "/path/to/routing.yaml" # Path to routing configuration file (env: PG_FLO_ROUTING_CONFIG)
 

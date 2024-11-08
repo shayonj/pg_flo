@@ -31,116 +31,12 @@ trap cleanup EXIT
 
 make build
 
-# setup_docker
-
-# log "Running e2e order tests..."
-# if CI=false ruby ./internal/scripts/e2e_order_test.rb; then
-#   success "Original e2e tests completed successfully"
-# else
-#   error "Original e2e tests failed"
-#   exit 1
-# fi
-
-# log "Running e2e routing tests..."
-# if CI=false ./internal/scripts/e2e_routing.sh; then
-#   success "Original e2e tests completed successfully"
-# else
-#   error "Original e2e tests failed"
-#   exit 1
-# fi
-
-# setup_docker
-
-# log "Running e2e copy & stream tests..."
-# if CI=false ./internal/scripts/e2e_copy_and_stream.sh; then
-#   success "Original e2e tests completed successfully"
-# else
-#   error "Original e2e tests failed"
-#   exit 1
-# fi
-
-# setup_docker
-
-# log "Running e2e copy only tests..."
-# if CI=false ./internal/scripts/e2e_copy_only.sh; then
-#   success "Original e2e tests completed successfully"
-# else
-#   error "Original e2e tests failed"
-#   exit 1
-# fi
-
-# setup_docker
-
-# log "Running e2e copy & stream tests..."
-# if CI=false ./internal/scripts/e2e_multi_tenant.sh; then
-#   success "Original e2e tests completed successfully"
-# else
-#   error "Original e2e tests failed"
-#   exit 1
-# fi
-
-# setup_docker
-
-# log "Running new e2e stream tests with changes..."
-# if ./internal/scripts/e2e_test_stream.sh; then
-#   success "New e2e tests with changes completed successfully"
-# else
-#   error "New e2e tests with changes failed"
-#   exit 1
-# fi
-
 setup_docker
 
-# Run new e2e resume test
-log "Running new e2e resume test..."
-if ruby ./internal/scripts/e2e_resume_test.rb; then
-  success "E2E resume test completed successfully"
+log "Running e2e copy & stream tests..."
+if CI=false ./internal/scripts/e2e_copy_and_stream.sh; then
+  success "Original e2e tests completed successfully"
 else
-  error "E2E resume test failed"
+  error "Original e2e tests failed"
   exit 1
 fi
-
-# setup_docker
-
-# # Run new e2e test for transform & filter
-# log "Running new e2e test for transform & filter..."
-# if ./internal/scripts/e2e_transform_filter.sh; then
-#   success "E2E test for transform & filter test completed successfully"
-# else
-#   error "E2E test for transform & filter test failed"
-#   exit 1
-# fi
-
-# setup_docker
-
-# # Run new e2e test for DDL changes
-# log "Running new e2e test for DDL changes..."
-# if ./internal/scripts/e2e_ddl.sh; then
-#   success "E2E test for DDL changes completed successfully"
-# else
-#   error "E2E test for DDL changes failed"
-#   exit 1
-# fi
-
-# setup_docker
-
-# Run new e2e test for Postgres changes
-# log "Running new e2e test Postgres Sink..."
-# if ./internal/scripts/e2e_postgres.sh; then
-#   success "E2E test for Postgres Sink completed successfully"
-# else
-#   error "E2E test for Postgres Sink failed"
-#   exit 1
-# fi
-
-# setup_docker
-
-# log "Running new e2e test Postgres Sink..."
-# if ./internal/scripts/e2e_postgres_data_type.sh; then
-#   success "E2E test for Postgres Sink completed successfully"
-# else
-#   error "E2E test for Postgres Sink failed"
-#   exit 1
-# fi
-
-success "All local e2e tests completed successfully"
