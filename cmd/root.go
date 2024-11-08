@@ -109,6 +109,7 @@ func init() {
 	workerCmd.PersistentFlags().String("nats-url", "", "NATS server URL (env: PG_FLO_NATS_URL)")
 	workerCmd.PersistentFlags().String("rules-config", "", "Path to rules configuration file (env: PG_FLO_RULES_CONFIG)")
 	workerCmd.PersistentFlags().String("routing-config", "", "Path to routing configuration file (env: PG_FLO_ROUTING_CONFIG)")
+	workerCmd.PersistentFlags().Int("batch-size", 1000, "Number of messages to process in a batch (env: PG_FLO_BATCH_SIZE)")
 
 	markPersistentFlagRequired(workerCmd, "group", "nats-url")
 
@@ -290,7 +291,14 @@ func runWorker(cmd *cobra.Command, _ []string) {
 		log.Fatal().Err(err).Msg("Failed to create sink")
 	}
 
-	w := worker.NewWorker(natsClient, ruleEngine, router, sink, group)
+	w := worker.NewWorker(
+		natsClient,
+		ruleEngine,
+		router,
+		sink,
+		group,
+		worker.WithBatchSize(viper.GetInt("batch-size")),
+	)
 
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()

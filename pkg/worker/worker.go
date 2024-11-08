@@ -34,16 +34,26 @@ type Worker struct {
 	wg             sync.WaitGroup
 }
 
+// Option is a function type that modifies Worker configuration
+type Option func(*Worker)
+
+// WithBatchSize sets the batch size for the worker
+func WithBatchSize(size int) Option {
+	return func(w *Worker) {
+		w.batchSize = size
+	}
+}
+
 func init() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05.000"})
 	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
 }
 
-// NewWorker creates and returns a new Worker instance with the provided NATS client, rule engine, router, sink, and group.
-func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, router *routing.Router, sink sinks.Sink, group string) *Worker {
+// NewWorker creates and returns a new Worker instance with the provided NATS client
+func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, router *routing.Router, sink sinks.Sink, group string, opts ...Option) *Worker {
 	logger := log.With().Str("component", "worker").Logger()
 
-	return &Worker{
+	w := &Worker{
 		natsClient:     natsClient,
 		ruleEngine:     ruleEngine,
 		router:         router,
@@ -53,9 +63,16 @@ func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, r
 		batchSize:      1000,
 		buffer:         make([]*utils.CDCMessage, 0, 1000),
 		lastSavedState: 0,
-		flushInterval:  1 * time.Second,
+		flushInterval:  500 * time.Millisecond,
 		shutdownCh:     make(chan struct{}),
 	}
+
+	for _, opt := range opts {
+		opt(w)
+	}
+	w.buffer = make([]*utils.CDCMessage, 0, w.batchSize)
+
+	return w
 }
 
 // Start begins the worker's message processing loop, setting up the NATS consumer and processing messages.
@@ -123,7 +140,7 @@ func (w *Worker) processMessages(ctx context.Context, sub *nats.Subscription) er
 				w.logger.Error().Err(err).Msg("Failed to flush buffer on interval")
 			}
 		default:
-			msgs, err := sub.Fetch(w.batchSize, nats.MaxWait(500*time.Millisecond))
+			msgs, err := sub.Fetch(10, nats.MaxWait(500*time.Millisecond))
 			if err != nil && !errors.Is(err, nats.ErrTimeout) {
 				w.logger.Error().Err(err).Msg("Error fetching messages")
 				continue
@@ -199,7 +216,10 @@ func (w *Worker) flushBuffer() error {
 		return nil
 	}
 
-	w.logger.Debug().Int("messages", len(w.buffer)).Msg("Flushing buffer")
+	w.logger.Debug().
+		Int("messages", len(w.buffer)).
+		Int("batch_size", w.batchSize).
+		Msg("Flushing buffer")
 
 	err := w.sink.WriteBatch(w.buffer)
 	if err != nil {

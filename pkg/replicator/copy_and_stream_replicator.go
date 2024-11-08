@@ -296,7 +296,7 @@ func (r *CopyAndStreamReplicator) CopyTableRange(ctx context.Context, tableName 
 	}
 
 	query := r.buildCopyQuery(tableName, startPage, endPage)
-	return r.executeCopyQuery(ctx, tx, query, schema, tableName, startPage, endPage, workerID)
+	return r.executeCopyQuery(ctx, tx, query, schema, tableName, workerID)
 }
 
 // setTransactionSnapshot sets the transaction snapshot.
@@ -329,7 +329,7 @@ func (r *CopyAndStreamReplicator) buildCopyQuery(tableName string, startPage, en
 }
 
 // executeCopyQuery executes the copy query and publishes the results to NATS.
-func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.Tx, query, schema, tableName string, startPage, endPage uint32, workerID int) (int64, error) {
+func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.Tx, query, schema, tableName string, workerID int) (int64, error) {
 	r.Logger.Debug().Str("copyQuery", query).Int("workerID", workerID).Msg("Executing initial copy query")
 
 	rows, err := tx.Query(context.Background(), query)
@@ -395,8 +395,6 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("error during row iteration: %v", err)
 	}
-
-	r.Logger.Info().Str("table", tableName).Int("start_page", int(startPage)).Int("end_page", int(endPage)).Int64("rows_copied", copyCount).Msg("Copied table range")
 
 	return copyCount, nil
 }
