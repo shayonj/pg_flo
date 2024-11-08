@@ -33,8 +33,8 @@ make build
 
 setup_docker
 
-log "Running e2e copy & stream tests..."
-if CI=false ./internal/scripts/e2e_copy_and_stream.sh; then
+log "Running e2e postgres tests..."
+if CI=false ./internal/scripts/e2e_postgres.sh; then
   success "Original e2e tests completed successfully"
 else
   error "Original e2e tests failed"
