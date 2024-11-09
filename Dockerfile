@@ -12,5 +12,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build -v \
   -o pg_flo .
 
 FROM alpine:latest
+RUN apk add --no-cache postgresql15-client
 COPY --from=builder /app/pg_flo /usr/local/bin/
 ENTRYPOINT ["pg_flo"]
