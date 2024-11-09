@@ -1,31 +1,32 @@
 # pg_flo Examples
 
-This guide demonstrates common use cases for pg_flo with practical examples.
+This guide demonstrates common use cases for pg_flo with practical examples. For full configuration options, see the [example config file](../pg-flo.yaml).
 
 ## Basic Replication
 
 Simple database-to-database replication:
 
 ```bash
+# Start NATS server
+docker run -d --name pg_flo_nats \
+  --network host \
+  -v /path/to/nats-server.conf:/etc/nats/nats-server.conf \
+  nats:latest \
+  -c /etc/nats/nats-server.conf
+
 # Start replicator
-pg_flo replicator \
-  --host source-db.example.com \
-  --port 5432 \
-  --dbname myapp \
-  --user replicator \
-  --password secret \
-  --group users_orders \
-  --tables users,orders \
-  --nats-url nats://localhost:4222
+docker run -d --name pg_flo_replicator \
+  --network host \
+  -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
+  shayonj/pg_flo:latest \
+  replicator --config /etc/pg_flo/config.yaml
 
 # Start worker
-pg_flo worker postgres \
-  --group users_orders \
-  --nats-url nats://localhost:4222 \
-  --target-host dest-db.example.com \
-  --target-dbname myapp \
-  --target-user writer \
-  --target-password secret
+docker run -d --name pg_flo_worker \
+  --network host \
+  -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
+  shayonj/pg_flo:latest \
+  worker postgres --config /etc/pg_flo/config.yaml
 ```
 
 ## Data Masking and Transformation
@@ -81,7 +82,7 @@ users:
 pg_flo worker postgres \
   --group user_migration \
   --routing-config /path/to/routing.yaml \
-  # ... other postgres connection flags
+  # ... other config flags
 ```
 
 ## Initial Load Options
@@ -95,7 +96,7 @@ pg_flo replicator \
   --copy \
   --max-copy-workers-per-table 4 \
   --group initial_load \
-  # ... other connection flags
+   # ... other config flags
 ```
 
 ### Copy and Stream
@@ -107,7 +108,7 @@ pg_flo replicator \
   --copy-and-stream \
   --max-copy-workers-per-table 4 \
   --group full_sync \
-  # ... other connection flags
+   # ... other config flags
 ```
 
 ## Multi-Destination Pipeline
@@ -118,7 +119,7 @@ Stream changes to multiple destinations simultaneously:
 # Terminal 1: Stream to PostgreSQL
 pg_flo worker postgres \
   --group audit \
-  # ... postgres connection flags
+   # ... other config flags
 
 # Terminal 2: Stream to files for archival
 pg_flo worker file \
@@ -140,7 +141,7 @@ Enable DDL tracking to capture schema changes. DDLs are applied on the destinati
 pg_flo replicator \
   --track-ddl \
   --group schema_sync \
-  # ... other connection flags
+   # ... other config flags
 
 pg_flo worker postgres \
   --group schema_sync \
@@ -175,6 +176,8 @@ target-password: "secret"
 pg_flo replicator --config /path/to/config.yaml
 pg_flo worker postgres --config /path/to/config.yaml
 ```
+
+See the [example config file](../pg-flo.yaml) for more details.
 
 ## Environment Variables
 

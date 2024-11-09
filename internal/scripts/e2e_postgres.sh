@@ -18,23 +18,59 @@ create_tables() {
   success "Test tables created in source database"
 }
 
+create_config_files() {
+  log "Creating config files..."
+
+  # Create replicator config
+  cat >"/tmp/pg_flo_replicator.yml" <<EOF
+# Replicator PostgreSQL connection settings
+host: "${PG_HOST}"
+port: ${PG_PORT}
+dbname: "${PG_DB}"
+user: "${PG_USER}"
+password: "${PG_PASSWORD}"
+schema: "public"
+group: "group_postgres_sink"
+tables:
+  - users
+  - toast_test
+nats-url: "nats://localhost:4222"
+EOF
+
+  # Create worker config
+  cat >"/tmp/pg_flo_worker.yml" <<EOF
+# Worker settings
+group: "group_postgres_sink"
+nats-url: "nats://localhost:4222"
+batch-size: 5000
+
+# Source connection for schema sync
+source-host: "${PG_HOST}"
+source-port: ${PG_PORT}
+source-dbname: "${PG_DB}"
+source-user: "${PG_USER}"
+source-password: "${PG_PASSWORD}"
+
+# Target PostgreSQL connection settings
+target-host: "${TARGET_PG_HOST}"
+target-port: ${TARGET_PG_PORT}
+target-dbname: "${TARGET_PG_DB}"
+target-user: "${TARGET_PG_USER}"
+target-password: "${TARGET_PG_PASSWORD}"
+target-sync-schema: true
+EOF
+
+  success "Config files created"
+}
+
 start_pg_flo_replication() {
   log "Starting pg_flo replicator..."
   if [ -f "$pg_flo_LOG" ]; then
     mv "$pg_flo_LOG" "${pg_flo_LOG}.bak"
     log "Backed up previous replicator log to ${pg_flo_LOG}.bak"
   fi
-  $pg_flo_BIN replicator \
-    --host "$PG_HOST" \
-    --port "$PG_PORT" \
-    --dbname "$PG_DB" \
-    --user "$PG_USER" \
-    --password "$PG_PASSWORD" \
-    --group "group_postgres_sink" \
-    --tables "users,toast_test" \
-    --schema "public" \
-    --nats-url "$NATS_URL" \
-    >"$pg_flo_LOG" 2>&1 &
+
+  $pg_flo_BIN replicator --config "/tmp/pg_flo_replicator.yml" >"$pg_flo_LOG" 2>&1 &
   pg_flo_PID=$!
   log "pg_flo replicator started with PID: $pg_flo_PID"
   success "pg_flo replicator started"
@@ -46,22 +82,8 @@ start_pg_flo_worker() {
     mv "$pg_flo_WORKER_LOG" "${pg_flo_WORKER_LOG}.bak"
     log "Backed up previous worker log to ${pg_flo_WORKER_LOG}.bak"
   fi
-  $pg_flo_BIN worker postgres \
-    --group "group_postgres_sink" \
-    --nats-url "$NATS_URL" \
-    --source-host "$PG_HOST" \
-    --source-port "$PG_PORT" \
-    --source-dbname "$PG_DB" \
-    --source-user "$PG_USER" \
-    --source-password "$PG_PASSWORD" \
-    --target-host "$TARGET_PG_HOST" \
-    --target-port "$TARGET_PG_PORT" \
-    --target-dbname "$TARGET_PG_DB" \
-    --target-user "$TARGET_PG_USER" \
-    --target-password "$TARGET_PG_PASSWORD" \
-    --batch-size 5000 \
-    --target-sync-schema \
-    >"$pg_flo_WORKER_LOG" 2>&1 &
+
+  $pg_flo_BIN worker postgres --config "/tmp/pg_flo_worker.yml" >"$pg_flo_WORKER_LOG" 2>&1 &
   pg_flo_WORKER_PID=$!
   log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
   success "pg_flo worker started"
@@ -228,6 +250,7 @@ verify_changes() {
 test_pg_flo_postgres_sink() {
   setup_postgres
   create_tables
+  create_config_files
   start_pg_flo_replication
   sleep 2
   start_pg_flo_worker
