@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 )
@@ -25,14 +26,24 @@ func NewReplicationConnection(config Config) ReplicationConnection {
 
 // Connect establishes a connection to the PostgreSQL database for replication.
 func (rc *PostgresReplicationConnection) Connect(ctx context.Context) error {
-	connString := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?replication=database",
-		rc.Config.User, rc.Config.Password, rc.Config.Host, rc.Config.Port, rc.Config.Database)
+	config, err := pgx.ParseConfig(fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s",
+		rc.Config.Host,
+		rc.Config.Port,
+		rc.Config.Database,
+		rc.Config.User,
+		rc.Config.Password))
+	if err != nil {
+		return fmt.Errorf("failed to parse connection config: %v", err)
+	}
 
-	conn, err := pgconn.Connect(ctx, connString)
+	config.RuntimeParams["replication"] = "database"
+
+	conn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to PostgreSQL: %v", err)
 	}
-	rc.Conn = conn
+
+	rc.Conn = conn.PgConn()
 	return nil
 }
 

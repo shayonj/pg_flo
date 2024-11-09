@@ -6,7 +6,7 @@ services:
     container_name: pg_logical_replication
     environment:
       POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
+      POSTGRES_PASSWORD: mypassword!@#%1234
       POSTGRES_DB: mydb
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -27,7 +27,7 @@ services:
     container_name: pg_target
     environment:
       POSTGRES_USER: targetuser
-      POSTGRES_PASSWORD: targetpassword
+      POSTGRES_PASSWORD: targetpassword!@#1234
       POSTGRES_DB: targetdb
     volumes:
       - target_postgres_data:/var/lib/postgresql/data
