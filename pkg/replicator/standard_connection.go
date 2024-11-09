@@ -16,7 +16,13 @@ type StandardConnectionImpl struct {
 
 // NewStandardConnection creates a new StandardConnectionImpl instance and establishes a connection.
 func NewStandardConnection(config Config) (*StandardConnectionImpl, error) {
-	connString := fmt.Sprintf("postgres://%s:%s@%s:%d/%s", config.User, config.Password, config.Host, config.Port, config.Database)
+	connString := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s",
+		config.Host,
+		config.Port,
+		config.Database,
+		config.User,
+		config.Password)
+
 	poolConfig, err := pgxpool.ParseConfig(connString)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse connection string: %v", err)

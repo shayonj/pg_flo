@@ -3,13 +3,13 @@
 PG_HOST="${PG_HOST:-localhost}"
 PG_PORT="${PG_PORT:-5433}"
 PG_USER="${PG_USER:-myuser}"
-PG_PASSWORD="${PG_PASSWORD:-mypassword}"
+PG_PASSWORD="${PG_PASSWORD:-mypassword!@#%1234}"
 PG_DB="${PG_DB:-mydb}"
 
 TARGET_PG_HOST="${TARGET_PG_HOST:-localhost}"
 TARGET_PG_PORT="${TARGET_PG_PORT:-5434}"
 TARGET_PG_USER="${TARGET_PG_USER:-targetuser}"
-TARGET_PG_PASSWORD="${TARGET_PG_PASSWORD:-targetpassword}"
+TARGET_PG_PASSWORD="${TARGET_PG_PASSWORD:-targetpassword!@#1234}"
 TARGET_PG_DB="${TARGET_PG_DB:-targetdb}"
 
 NATS_URL="${NATS_URL:-nats://localhost:4222}"
