@@ -14,7 +14,7 @@ import (
 // ConvertToPgCompatibleOutput converts a Go value to its PostgreSQL output format.
 func ConvertToPgCompatibleOutput(value interface{}, oid uint32) ([]byte, error) {
 	if value == nil {
-		return []byte("NULL"), nil
+		return nil, nil
 	}
 
 	switch oid {

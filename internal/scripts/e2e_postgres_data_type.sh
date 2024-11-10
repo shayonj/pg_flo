@@ -18,46 +18,47 @@ create_test_table() {
   # Create the test table with various data types
   run_sql "DROP TABLE IF EXISTS public.data_type_test;"
   run_sql "CREATE TABLE public.data_type_test (
-    id serial PRIMARY KEY,
-    binary_data bytea,
-    blob_data oid,
-    timestamp_data timestamp with time zone,
-    float_data double precision,
-    integer_data integer,
-    smallint_data smallint,
-    bigint_data bigint,
-    boolean_data boolean,
-    json_data json,
-    jsonb_data jsonb,
-    array_text_data text[],
-    array_int_data integer[],
-    array_bytea_data bytea[],
-    numeric_data numeric(10, 2),
-    uuid_data uuid,
-    inet_data inet,
-    cidr_data cidr,
-    macaddr_data macaddr,
-    macaddr8_data macaddr8,
-    point_data point,
-    line_data line,
-    lseg_data lseg,
-    box_data box,
-    path_data path,
-    polygon_data polygon,
-    circle_data circle,
-    interval_data interval,
-    hstore_data hstore,
-    tsrange_data tsrange,
-    tstzrange_data tstzrange,
-    daterange_data daterange,
-    int4range_data int4range,
-    int8range_data int8range,
-    numrange_data numrange,
-    tsvector_data tsvector,
-    tsquery_data tsquery,
-    xml_data xml,
-    enum_data mood,
-    composite_data name_type
+    id serial PRIMARY KEY NOT NULL,
+    text_data text NOT NULL,
+    binary_data bytea NOT NULL,
+    blob_data oid NOT NULL,
+    timestamp_data timestamp with time zone NOT NULL,
+    float_data double precision NOT NULL,
+    integer_data integer NOT NULL,
+    smallint_data smallint NOT NULL,
+    bigint_data bigint NOT NULL,
+    boolean_data boolean NOT NULL,
+    json_data json NOT NULL,
+    jsonb_data jsonb NOT NULL,
+    array_text_data text[] NOT NULL,
+    array_int_data integer[] NOT NULL,
+    array_bytea_data bytea[] NOT NULL,
+    numeric_data numeric(10, 2) NOT NULL,
+    uuid_data uuid NOT NULL,
+    inet_data inet NOT NULL,
+    cidr_data cidr NOT NULL,
+    macaddr_data macaddr NOT NULL,
+    macaddr8_data macaddr8 NOT NULL,
+    point_data point NOT NULL,
+    line_data line NOT NULL,
+    lseg_data lseg NOT NULL,
+    box_data box NOT NULL,
+    path_data path NOT NULL,
+    polygon_data polygon NOT NULL,
+    circle_data circle NOT NULL,
+    interval_data interval NOT NULL,
+    hstore_data hstore NOT NULL,
+    tsrange_data tsrange NOT NULL,
+    tstzrange_data tstzrange NOT NULL,
+    daterange_data daterange NOT NULL,
+    int4range_data int4range NOT NULL,
+    int8range_data int8range NOT NULL,
+    numrange_data numrange NOT NULL,
+    tsvector_data tsvector NOT NULL,
+    tsquery_data tsquery NOT NULL,
+    xml_data xml NOT NULL,
+    enum_data mood NOT NULL,
+    composite_data name_type NOT NULL
   );"
   success "Test table created in source database"
 }
@@ -67,6 +68,7 @@ insert_test_data() {
 
   # Insert test data into the table
   run_sql "INSERT INTO public.data_type_test (
+    text_data,
     binary_data,
     blob_data,
     timestamp_data,
@@ -107,7 +109,8 @@ insert_test_data() {
     enum_data,
     composite_data
   ) VALUES (
-    E'\\\\x44656661756C74', -- binary_data
+    'null', -- text_data with literal 'null' string
+    decode('deadbeef', 'hex'), -- binary_data
     lo_create(0), -- blob_data
     '2023-04-15 12:00:00+00', -- timestamp_data
     3.14159265359, -- float_data
@@ -115,9 +118,60 @@ insert_test_data() {
     32767, -- smallint_data
     9223372036854775807, -- bigint_data
     true, -- boolean_data
-    '{\"json_key\": \"json_value\"}', -- json_data
-    '{\"jsonb_key\": \"jsonb_value\"}', -- jsonb_data
-    ARRAY['one', 'two', 'three'], -- array_text_data
+    '{
+        \"nested\": {
+            \"string\": \"value\",
+            \"number\": 42,
+            \"bool\": true,
+            \"null_value\": null,
+            \"array\": [1, 2, 3],
+            \"nested_object\": {
+                \"key\": \"value\",
+                \"numbers\": [1.1, 2.2, 3.3],
+                \"mixed_array\": [\"text\", 1, true, null, {\"key\": \"value\"}]
+            }
+        },
+        \"arrays\": {
+            \"empty\": [],
+            \"strings\": [\"a\", \"b\", \"c\"],
+            \"objects\": [
+                {\"id\": 1, \"name\": \"first\"},
+                {\"id\": 2, \"name\": \"second\"}
+            ]
+        },
+        \"special_chars\": \"Hello \\\"quoted\\\" and \\n newline\"
+    }',
+    '{
+        \"metadata\": {
+            \"version\": 1,
+            \"tags\": [\"test\", \"json\"],
+            \"config\": {
+                \"enabled\": true,
+                \"limits\": {
+                    \"max\": 100,
+                    \"min\": 0
+                },
+                \"options\": [
+                    {\"name\": \"opt1\", \"value\": 1},
+                    {\"name\": \"opt2\", \"value\": 2}
+                ]
+            }
+        },
+        \"data\": {
+            \"nulls\": [null, \"null\", {\"key\": null}],
+            \"unicode\": \"Hello 世界 👋\",
+            \"deep_nesting\": {
+                \"level1\": {
+                    \"level2\": {
+                        \"level3\": {
+                            \"value\": \"deep\"
+                        }
+                    }
+                }
+            }
+        }
+    }',
+    ARRAY['null', 'two', 'three'], -- array_text_data
     ARRAY[1, 2, 3], -- array_int_data
     ARRAY[
       E'\\\\x010203'::bytea,
