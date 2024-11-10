@@ -2,13 +2,16 @@ package sinks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shayonj/pg_flo/pkg/utils"
@@ -61,13 +64,17 @@ func NewPostgresSink(targetHost string, targetPort int, targetDBName, targetUser
 
 // New method to handle connection
 func (s *PostgresSink) connect(ctx context.Context) error {
+	var connMutex sync.Mutex
+
 	return utils.WithRetry(ctx, s.retryConfig, func() error {
 		conn, err := pgx.ConnectConfig(ctx, s.connConfig)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to connect to database, will retry")
 			return err
 		}
+		connMutex.Lock()
 		s.conn = conn
+		connMutex.Unlock()
 		return nil
 	})
 }
@@ -122,8 +129,13 @@ func (s *PostgresSink) handleInsert(tx pgx.Tx, message *utils.CDCMessage) error 
 		values = append(values, value)
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s)",
-		message.Schema, message.Table, strings.Join(columns, ","), strings.Join(placeholders, ","))
+	query := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING",
+		message.Schema,
+		message.Table,
+		strings.Join(columns, ","),
+		strings.Join(placeholders, ","),
+		message.PrimaryKeyColumn,
+	)
 
 	_, err := tx.Exec(context.Background(), query, values...)
 	return err
@@ -198,19 +210,41 @@ func (s *PostgresSink) handleDelete(tx pgx.Tx, message *utils.CDCMessage) error 
 }
 
 // handleDDL processes a DDL operation
-func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) error {
-	ddlCommand, err := message.GetColumnValue("command")
+func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) (pgx.Tx, error) {
+	ddlCommand, err := message.GetColumnValue("ddl_command")
 	if err != nil {
-		return fmt.Errorf("failed to get DDL command: %v", err)
+		return tx, fmt.Errorf("failed to get DDL command: %v", err)
 	}
 
 	ddlString, ok := ddlCommand.(string)
 	if !ok {
-		return fmt.Errorf("DDL command is not a string")
+		return tx, fmt.Errorf("DDL command is not a string")
+	}
+
+	log.Debug().Msgf("Executing DDL: %s", ddlString)
+
+	if strings.Contains(strings.ToUpper(ddlString), "CONCURRENTLY") {
+		if err := tx.Commit(context.Background()); err != nil {
+			return nil, fmt.Errorf("failed to commit transaction before concurrent DDL: %v", err)
+		}
+
+		if _, err := s.conn.Exec(context.Background(), ddlString); err != nil {
+			return nil, fmt.Errorf("failed to execute concurrent DDL: %v", err)
+		}
+
+		newTx, err := s.conn.Begin(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("failed to begin new transaction after concurrent DDL: %v", err)
+		}
+		return newTx, nil
 	}
 
 	_, err = tx.Exec(context.Background(), ddlString)
-	return err
+	if err != nil {
+		return tx, fmt.Errorf("failed to execute DDL: %v", err)
+	}
+
+	return tx, nil
 }
 
 // disableForeignKeys disables foreign key checks
@@ -229,74 +263,128 @@ func (s *PostgresSink) enableForeignKeys(ctx context.Context) error {
 func (s *PostgresSink) WriteBatch(messages []*utils.CDCMessage) error {
 	ctx := context.Background()
 
-	// Check connection and reconnect if needed
 	if s.conn == nil || s.conn.IsClosed() {
 		if err := s.connect(ctx); err != nil {
-			return fmt.Errorf("failed to reconnect to database: %v", err)
+			return fmt.Errorf("failed to connect to database: %v", err)
 		}
 	}
 
-	return utils.WithRetry(ctx, s.retryConfig, func() error {
-		tx, err := s.conn.Begin(ctx)
-		if err != nil {
-			// Check if connection is closed and try to reconnect
-			if s.conn.IsClosed() {
-				if reconnectErr := s.connect(ctx); reconnectErr != nil {
-					return reconnectErr
-				}
-				return err // Retry the operation
-			}
-			return fmt.Errorf("failed to begin transaction: %v", err)
-		}
-		defer func() {
-			if err := tx.Rollback(ctx); err != nil && err != pgx.ErrTxClosed {
+	return s.writeBatchInternal(ctx, messages)
+}
+
+// New helper method to handle batch writing
+func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils.CDCMessage) error {
+	tx, err := s.conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %v", err)
+	}
+
+	defer func() {
+		if tx != nil {
+			if err := tx.Rollback(ctx); err != nil {
 				log.Error().Err(err).Msg("failed to rollback transaction")
 			}
-		}()
+		}
+	}()
 
-		if s.disableForeignKeyChecks {
-			if err := s.disableForeignKeys(ctx); err != nil {
-				return fmt.Errorf("failed to disable foreign key checks: %v", err)
+	if s.disableForeignKeyChecks {
+		if err := s.disableForeignKeys(ctx); err != nil {
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+				log.Error().Err(rollbackErr).Msg("failed to rollback transaction")
 			}
-			defer func() {
-				if err := s.enableForeignKeys(ctx); err != nil {
-					log.Error().Err(err).Msg("failed to re-enable foreign key checks")
-				}
-			}()
+			return fmt.Errorf("failed to disable foreign key checks: %v", err)
+		}
+		defer func() {
+			if err := s.enableForeignKeys(ctx); err != nil {
+				log.Error().Err(err).Msg("failed to re-enable foreign key checks")
+			}
+		}()
+	}
+
+	for _, message := range messages {
+		primaryKeyColumn := message.MappedPrimaryKeyColumn
+		if primaryKeyColumn != "" {
+			message.PrimaryKeyColumn = message.MappedPrimaryKeyColumn
 		}
 
-		for _, message := range messages {
-
-			primaryKeyColumn := message.MappedPrimaryKeyColumn
-			if primaryKeyColumn != "" {
-				message.PrimaryKeyColumn = message.MappedPrimaryKeyColumn
+		var operationErr error
+		err := utils.WithRetry(ctx, s.retryConfig, func() error {
+			if s.conn == nil || s.conn.IsClosed() {
+				if err := s.connect(ctx); err != nil {
+					return fmt.Errorf("failed to reconnect to database: %v", err)
+				}
+				// Start a new transaction if needed
+				if tx == nil {
+					newTx, err := s.conn.Begin(ctx)
+					if err != nil {
+						return fmt.Errorf("failed to begin new transaction: %v", err)
+					}
+					tx = newTx
+				}
 			}
 
-			var err error
 			switch message.Type {
 			case "INSERT":
-				err = s.handleInsert(tx, message)
+				operationErr = s.handleInsert(tx, message)
 			case "UPDATE":
-				err = s.handleUpdate(tx, message)
+				operationErr = s.handleUpdate(tx, message)
 			case "DELETE":
-				err = s.handleDelete(tx, message)
+				operationErr = s.handleDelete(tx, message)
 			case "DDL":
-				err = s.handleDDL(tx, message)
+				var newTx pgx.Tx
+				newTx, operationErr = s.handleDDL(tx, message)
+				tx = newTx
 			default:
-				return fmt.Errorf("unknown event type: %s", message.Type)
+				operationErr = fmt.Errorf("unknown event type: %s", message.Type)
 			}
 
-			if err != nil {
-				return fmt.Errorf("failed to handle %s: %v", message.Type, err)
+			if operationErr != nil && isConnectionError(operationErr) {
+				return operationErr // Retry on connection errors
 			}
-		}
+			return nil
+		})
 
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit transaction: %v", err)
+		if err != nil || operationErr != nil {
+			if tx != nil {
+				if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+					log.Error().Err(rollbackErr).Msg("failed to rollback transaction")
+				}
+			}
+			tx = nil
+			return fmt.Errorf("failed to handle %s: %v", message.Type, err)
 		}
+	}
 
-		return nil
-	})
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	tx = nil // Prevent deferred rollback
+	return nil
+}
+
+// New helper function to determine if an error is a connection issue
+func isConnectionError(err error) bool {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err == pgx.ErrTxClosed {
+		return true
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		// Check for specific PostgreSQL error codes related to connection issues
+		switch pgErr.Code {
+		case "08006", // connection_failure
+			"08003", // connection_does_not_exist
+			"57P01", // admin_shutdown
+			"57P02", // crash_shutdown
+			"57P03": // cannot_connect_now
+			return true
+		}
+	}
+	return false
 }
 
 // Close closes the database connection

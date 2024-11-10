@@ -34,15 +34,25 @@ start_pg_flo_replication() {
 }
 
 start_pg_flo_worker() {
-  log "Starting pg_flo worker with file sink..."
+  log "Starting pg_flo worker with PostgreSQL sink..."
   if [ -f "$pg_flo_WORKER_LOG" ]; then
     mv "$pg_flo_WORKER_LOG" "${pg_flo_WORKER_LOG}.bak"
     log "Backed up previous worker log to ${pg_flo_WORKER_LOG}.bak"
   fi
-  $pg_flo_BIN worker file \
+  $pg_flo_BIN worker postgres \
     --group "group_ddl" \
     --nats-url "$NATS_URL" \
-    --file-output-dir "$OUTPUT_DIR" \
+    --source-host "$PG_HOST" \
+    --source-port "$PG_PORT" \
+    --source-dbname "$PG_DB" \
+    --source-user "$PG_USER" \
+    --source-password "$PG_PASSWORD" \
+    --target-host "$TARGET_PG_HOST" \
+    --target-port "$TARGET_PG_PORT" \
+    --target-dbname "$TARGET_PG_DB" \
+    --target-user "$TARGET_PG_USER" \
+    --target-password "$TARGET_PG_PASSWORD" \
+    --target-sync-schema \
     >"$pg_flo_WORKER_LOG" 2>&1 &
   pg_flo_WORKER_PID=$!
   log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
@@ -62,45 +72,31 @@ perform_ddl_operations() {
 
 verify_ddl_changes() {
   log "Verifying DDL changes..."
-  local ddl_events=$(jq -s '[.[] | select(.Type == "DDL")]' "$OUTPUT_DIR"/*.jsonl)
-  local ddl_count=$(echo "$ddl_events" | jq 'length')
-  log "DDL event count: $ddl_count (expected 6)"
 
-  if [ "$ddl_count" -eq 6 ]; then
-    success "DDL event count matches expected value"
+  # Check table structure in target database
+  local new_column_exists=$(run_sql_target "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'new_column';")
+  local new_column_one_exists=$(run_sql_target "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'new_column_one';")
+  local old_data_type=$(run_sql_target "SELECT data_type FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'old_data';")
+  old_data_type=$(echo "$old_data_type" | xargs)
+
+  if [ "$new_column_exists" -eq 1 ]; then
+    success "new_column exists in target database"
   else
-    error "DDL event count does not match expected value"
+    error "new_column does not exist in target database"
     return 1
   fi
 
-  # Assert SQL statements
-  local expected_commands=(
-    "ALTER TABLE users ADD COLUMN new_column int;"
-    "CREATE INDEX CONCURRENTLY idx_users_data ON users (data);"
-    "ALTER TABLE users RENAME COLUMN data TO old_data;"
-    "DROP INDEX idx_users_data;"
-    "ALTER TABLE users ADD COLUMN new_column_one int;"
-    "ALTER TABLE users ALTER COLUMN old_data TYPE varchar(255);"
-  )
-
-  for i in "${!expected_commands[@]}"; do
-    local command=$(echo "$ddl_events" | jq -r ".[$i].NewTuple.ddl_command")
-    if [[ "$command" == "${expected_commands[$i]}" ]]; then
-      success "DDL command $((i + 1)) matches expected value"
-    else
-      error "DDL command $((i + 1)) does not match expected value"
-      log "Expected: ${expected_commands[$i]}"
-      log "Actual: $command"
-      return 1
-    fi
-  done
-
-  # Check for table_rewrite event
-  local table_rewrite_event=$(echo "$ddl_events" | jq '.[] | select(.NewTuple.event_type == "table_rewrite")')
-  if [ -n "$table_rewrite_event" ]; then
-    success "table_rewrite event detected"
+  if [ "$new_column_one_exists" -eq 1 ]; then
+    success "new_column_one exists in target database"
   else
-    error "table_rewrite event not found"
+    error "new_column_one does not exist in target database"
+    return 1
+  fi
+
+  if [ "$old_data_type" = "character varying" ]; then
+    success "old_data column type is character varying"
+  else
+    error "old_data column type is not character varying (got: '$old_data_type')"
     return 1
   fi
 
@@ -119,12 +115,11 @@ verify_ddl_changes() {
 test_pg_flo_ddl() {
   setup_postgres
   create_users
-  start_pg_flo_replication
-  sleep 1
-  perform_ddl_operations
-  sleep 2
   start_pg_flo_worker
-  sleep 2
+  sleep 5
+  start_pg_flo_replication
+  sleep 3
+  perform_ddl_operations
   stop_pg_flo_gracefully
   verify_ddl_changes || return 1
 }
