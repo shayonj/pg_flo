@@ -94,6 +94,9 @@ func (w *Worker) Start(ctx context.Context) error {
 		Durable:       consumerName,
 		FilterSubject: subject,
 		AckPolicy:     nats.AckExplicitPolicy,
+		MaxDeliver:    1,
+		AckWait:       25 * time.Minute,
+		DeliverPolicy: nats.DeliverAllPolicy,
 	}
 
 	_, err := js.AddConsumer(stream, consumerConfig)

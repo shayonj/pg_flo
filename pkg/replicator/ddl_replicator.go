@@ -3,6 +3,7 @@ package replicator
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -202,6 +203,11 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 			return nil
 		}
 
+		if d.shouldSkipDDLEvent(ddlCommand) {
+			processedIDs = append(processedIDs, id)
+			continue
+		}
+
 		if seenCommands[ddlCommand] {
 			processedIDs = append(processedIDs, id)
 			continue
@@ -302,4 +308,22 @@ func (d *DDLReplicator) HasPendingDDLEvents(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// shouldSkipDDLEvent determines if a DDL event should be skipped from processing
+func (d *DDLReplicator) shouldSkipDDLEvent(ddlCommand string) bool {
+	// Skip pg_flo internal operations
+	if strings.Contains(ddlCommand, "internal_pg_flo.") {
+		return true
+	}
+
+	publicationName := GeneratePublicationName(d.Config.Group)
+	if strings.Contains(ddlCommand, fmt.Sprintf("CREATE PUBLICATION %q", publicationName)) ||
+		strings.Contains(ddlCommand, fmt.Sprintf("DROP PUBLICATION %q", publicationName)) ||
+		strings.Contains(ddlCommand, "CREATE PUBLICATION pg_flo_") ||
+		strings.Contains(ddlCommand, "DROP PUBLICATION pg_flo_") {
+		return true
+	}
+
+	return false
 }
