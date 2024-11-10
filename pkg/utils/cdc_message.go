@@ -225,7 +225,7 @@ func DecodeCDCMessage(data []byte) (*CDCMessage, error) {
 
 // DecodeValue decodes a byte slice into a Go value based on the PostgreSQL data type
 func DecodeValue(data []byte, dataType uint32) (interface{}, error) {
-	if data == nil || strings.EqualFold(string(data), "NULL") {
+	if data == nil {
 		return nil, nil
 	}
 	strData := string(data)
