@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(dirname "$0")/e2e_common.sh"
 
 ROUTING_CONFIG="/tmp/pg_flo_routing_test.yml"
-RULES_CONFIG=/tmp/pg_flo_rules_test.yml
+RULES_CONFIG="/tmp/pg_flo_rules_test.yml"
 
 # Ensure temporary files are removed on exit
 trap 'rm -f "$ROUTING_CONFIG" "$RULES_CONFIG"' EXIT
@@ -161,6 +161,74 @@ EOF
   success "Rules configuration created"
 }
 
+create_config_files() {
+  log "Creating config files..."
+
+  # Create replicator config
+  cat >"/tmp/pg_flo_replicator.yml" <<EOF
+# Replicator PostgreSQL connection settings
+host: "${PG_HOST}"
+port: ${PG_PORT}
+dbname: "${PG_DB}"
+user: "${PG_USER}"
+password: "${PG_PASSWORD}"
+schema: "public"
+group: "group_routing_test"
+tables:
+  - users
+  - orders
+  - products
+nats-url: "${NATS_URL}"
+EOF
+
+  # Create worker config
+  cat >"/tmp/pg_flo_worker.yml" <<EOF
+# Worker settings
+group: "group_routing_test"
+nats-url: "${NATS_URL}"
+batch-size: 5000
+
+# Routing and rules configuration files
+routing-config: "${ROUTING_CONFIG}"
+rules-config: "${RULES_CONFIG}"
+
+# Source connection for schema sync
+source-host: "${PG_HOST}"
+source-port: ${PG_PORT}
+source-dbname: "${PG_DB}"
+source-user: "${PG_USER}"
+source-password: "${PG_PASSWORD}"
+
+# Target PostgreSQL connection settings
+target-host: "${TARGET_PG_HOST}"
+target-port: ${TARGET_PG_PORT}
+target-dbname: "${TARGET_PG_DB}"
+target-user: "${TARGET_PG_USER}"
+target-password: "${TARGET_PG_PASSWORD}"
+target-sync-schema: true
+EOF
+
+  create_routing_config
+  create_rules_config
+  success "Config files created"
+}
+
+start_pg_flo_replication() {
+  log "Starting pg_flo replicator..."
+  $pg_flo_BIN replicator --config "/tmp/pg_flo_replicator.yml" >"$pg_flo_LOG" 2>&1 &
+  pg_flo_PID=$!
+  log "pg_flo replicator started with PID: $pg_flo_PID"
+  success "pg_flo replicator started"
+}
+
+start_pg_flo_worker() {
+  log "Starting pg_flo worker with routing and rules..."
+  $pg_flo_BIN worker postgres --config "/tmp/pg_flo_worker.yml" >"$pg_flo_WORKER_LOG" 2>&1 &
+  pg_flo_WORKER_PID=$!
+  log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
+  success "pg_flo worker started"
+}
+
 simulate_changes() {
   log "Simulating changes..."
 
@@ -187,6 +255,7 @@ simulate_changes() {
 
 verify_changes() {
   log "Verifying changes in target database..."
+  local test_failed=false
 
   # Verify users (customers) table
   local user_count=$(run_sql_target "SELECT COUNT(*) FROM public.customers;" | xargs)
@@ -205,20 +274,26 @@ verify_changes() {
   local widget_tags_count=$(run_sql_target "SELECT array_length(tags, 1) FROM public.items WHERE item_name = 'Widget';" | xargs)
 
   # Assertions
-  assert_equals "$user_count" "2" "Customer count"
-  assert_equals "$john_email" "updated@example.com" "John's email"
-  assert_equals "$jane_email" "jane@example.com" "Jane's email"
-  assert_equals "$john_subscription" "enterprise" "John's subscription type"
+  assert_equals "$user_count" "2" "Customer count" || test_failed=true
+  assert_equals "$john_email" "updated@example.com" "John's email" || test_failed=true
+  assert_equals "$jane_email" "jane@example.com" "Jane's email" || test_failed=true
+  assert_equals "$john_subscription" "enterprise" "John's subscription type" || test_failed=true
 
-  assert_equals "$order_count" "2" "Transaction count"
-  assert_equals "$high_value_order" "150.00" "High-value order amount"
-  assert_equals "$order_items_count" "2" "Order items count"
+  assert_equals "$order_count" "2" "Transaction count" || test_failed=true
+  assert_equals "$high_value_order" "150.00" "High-value order amount" || test_failed=true
+  assert_equals "$order_items_count" "2" "Order items count" || test_failed=true
 
-  assert_equals "$product_count" "2" "Item count"
-  assert_equals "$widget_stock" "75" "Widget stock"
-  assert_equals "$widget_tags_count" "3" "Widget tags count"
+  assert_equals "$product_count" "2" "Item count" || test_failed=true
+  assert_equals "$widget_stock" "75" "Widget stock" || test_failed=true
+  assert_equals "$widget_tags_count" "3" "Widget tags count" || test_failed=true
+
+  if [ "$test_failed" = true ]; then
+    error "Verification failed: One or more assertions did not pass"
+    return 1
+  fi
 
   success "All changes verified successfully in target database"
+  return 0
 }
 
 assert_equals() {
@@ -229,54 +304,17 @@ assert_equals() {
   log "Assertion passed: $3"
 }
 
-start_pg_flo_replication() {
-  log "Starting pg_flo replicator..."
-  $pg_flo_BIN replicator \
-    --host "$PG_HOST" \
-    --port "$PG_PORT" \
-    --dbname "$PG_DB" \
-    --user "$PG_USER" \
-    --password "$PG_PASSWORD" \
-    --group "group_routing_test" \
-    --tables "users,orders,products" \
-    --schema "public" \
-    --nats-url "$NATS_URL" \
-    >"$pg_flo_LOG" 2>&1 &
-  pg_flo_PID=$!
-  log "pg_flo replicator started with PID: $pg_flo_PID"
-  success "pg_flo replicator started"
-}
-
-start_pg_flo_worker() {
-  log "Starting pg_flo worker with routing and rules..."
-  $pg_flo_BIN worker postgres \
-    --group "group_routing_test" \
-    --nats-url "$NATS_URL" \
-    --routing-config "$ROUTING_CONFIG" \
-    --rules-config "$RULES_CONFIG" \
-    --target-host "$TARGET_PG_HOST" \
-    --target-port "$TARGET_PG_PORT" \
-    --target-dbname "$TARGET_PG_DB" \
-    --target-user "$TARGET_PG_USER" \
-    --target-password "$TARGET_PG_PASSWORD" \
-    >"$pg_flo_WORKER_LOG" 2>&1 &
-  pg_flo_WORKER_PID=$!
-  log "pg_flo worker started with PID: $pg_flo_WORKER_PID"
-  success "pg_flo worker started"
-}
-
 test_pg_flo_routing() {
   setup_postgres
   create_tables
-  create_routing_config
-  create_rules_config
+  create_config_files
   start_pg_flo_replication
   sleep 2
   start_pg_flo_worker
   simulate_changes
 
   log "Waiting for pg_flo to process changes..."
-  sleep 5
+  sleep 2
 
   stop_pg_flo_gracefully
   verify_changes || return 1
