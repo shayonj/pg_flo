@@ -351,7 +351,7 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 				}
 			}
 			tx = nil
-			return fmt.Errorf("failed to handle %s: %v", message.Type, err)
+			return fmt.Errorf("failed to handle %s: %v-%v", message.Type, err, operationErr)
 		}
 	}
 

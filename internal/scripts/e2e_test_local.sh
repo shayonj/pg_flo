@@ -33,9 +33,9 @@ make build
 
 setup_docker
 
-log "Running e2e routing tests..."
-if CI=false ./internal/scripts/e2e_routing.sh; then
-  success "Original e2e tests completed successfully"
+log "Running e2e ddl tests..."
+if CI=false ./internal/scripts/e2e_ddl.sh; then
+  success "e2e ddl tests completed successfully"
 else
   error "Original e2e tests failed"
   exit 1

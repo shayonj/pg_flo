@@ -29,7 +29,23 @@ func NewDDLReplicator(config Config, BaseRepl *BaseReplicator, ddlConn StandardC
 
 // SetupDDLTracking sets up the necessary schema, table, and triggers for DDL tracking
 func (d *DDLReplicator) SetupDDLTracking(ctx context.Context) error {
-	_, err := d.DDLConn.Exec(ctx, `
+	tables, err := d.BaseRepl.GetConfiguredTables(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get configured tables: %w", err)
+	}
+
+	tableConditions := make([]string, len(tables))
+	for i, table := range tables {
+		parts := strings.Split(table, ".")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid table name format: %s", table)
+		}
+		tableConditions[i] = fmt.Sprintf("(nspname = '%s' AND relname = '%s')",
+			parts[0], parts[1])
+	}
+	tableFilter := strings.Join(tableConditions, " OR ")
+
+	_, err = d.DDLConn.Exec(ctx, fmt.Sprintf(`
 		CREATE SCHEMA IF NOT EXISTS internal_pg_flo;
 
 		CREATE TABLE IF NOT EXISTS internal_pg_flo.ddl_log (
@@ -47,91 +63,48 @@ func (d *DDLReplicator) SetupDDLTracking(ctx context.Context) error {
 			obj record;
 			ddl_command text;
 			table_name text;
+			should_track boolean;
 		BEGIN
 			SELECT current_query() INTO ddl_command;
 
 			IF TG_EVENT = 'ddl_command_end' THEN
 				FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
 				LOOP
+					should_track := false;
 					-- Extract table name if object type is table or index
 					IF obj.object_type IN ('table', 'table column') THEN
-						SELECT nspname || '.' || relname
-						INTO table_name
+						SELECT nspname || '.' || relname, (%s)
+						INTO table_name, should_track
 						FROM pg_class c
 						JOIN pg_namespace n ON c.relnamespace = n.oid
 						WHERE c.oid = obj.objid;
 					ELSIF obj.object_type = 'index' THEN
-						SELECT nspname || '.' || t.relname
-						INTO table_name
-						FROM pg_index i
-						JOIN pg_class t ON t.oid = i.indrelid
-						JOIN pg_namespace n ON t.relnamespace = n.oid
-						WHERE i.indexrelid = obj.objid;
-					ELSE
-						table_name := NULL;
+						WITH target_table AS (
+							SELECT t.oid as table_oid, n.nspname, t.relname
+							FROM pg_index i
+							JOIN pg_class t ON t.oid = i.indrelid
+							JOIN pg_namespace n ON t.relnamespace = n.oid
+							WHERE i.indexrelid = obj.objid
+						)
+						SELECT nspname || '.' || relname, (%s)
+						INTO table_name, should_track
+						FROM target_table;
 					END IF;
 
-					INSERT INTO internal_pg_flo.ddl_log (event_type, object_type, object_identity, table_name, ddl_command)
-					VALUES (TG_EVENT, obj.object_type, obj.object_identity, table_name, ddl_command);
-				END LOOP;
-
-			ELSIF TG_EVENT = 'sql_drop' THEN
-				FOR obj IN SELECT * FROM pg_event_trigger_dropped_objects()
-				LOOP
-					-- Attempt to extract table name if the object still exists
-					BEGIN
-						IF obj.object_type IN ('table', 'table column') THEN
-							SELECT nspname || '.' || relname
-							INTO table_name
-							FROM pg_class c
-							JOIN pg_namespace n ON c.relnamespace = n.oid
-							WHERE c.oid = obj.objid;
-					ELSIF obj.object_type = 'index' THEN
-						SELECT nspname || '.' || t.relname
-						INTO table_name
-						FROM pg_index i
-						JOIN pg_class t ON t.oid = i.indrelid
-						JOIN pg_namespace n ON t.relnamespace = n.oid
-						WHERE i.indexrelid = obj.objid;
-					ELSE
-						table_name := NULL;
+					IF should_track THEN
+						INSERT INTO internal_pg_flo.ddl_log (event_type, object_type, object_identity, table_name, ddl_command)
+						VALUES (TG_EVENT, obj.object_type, obj.object_identity, table_name, ddl_command);
 					END IF;
-				END;
-
-				INSERT INTO internal_pg_flo.ddl_log (event_type, object_type, object_identity, table_name, ddl_command)
-				VALUES (TG_EVENT, obj.object_type, obj.object_identity, table_name, ddl_command);
-			END LOOP;
-
-			ELSIF TG_EVENT = 'table_rewrite' THEN
-				FOR obj IN SELECT * FROM pg_event_trigger_table_rewrite_oid()
-				LOOP
-					SELECT nspname || '.' || relname
-					INTO table_name
-					FROM pg_class c
-					JOIN pg_namespace n ON c.relnamespace = n.oid
-					WHERE c.oid = obj.oid;
-
-					INSERT INTO internal_pg_flo.ddl_log (event_type, object_type, object_identity, table_name, ddl_command)
-					VALUES (TG_EVENT, 'table', table_name, table_name, ddl_command);
 				END LOOP;
-
 			END IF;
 		END;
-	$$ LANGUAGE plpgsql;
-
+		$$ LANGUAGE plpgsql;
 
 		DROP EVENT TRIGGER IF EXISTS pg_flo_ddl_trigger;
 		CREATE EVENT TRIGGER pg_flo_ddl_trigger ON ddl_command_end
 		EXECUTE FUNCTION internal_pg_flo.ddl_trigger();
+	`, tableFilter, tableFilter))
 
-		DROP EVENT TRIGGER IF EXISTS pg_flo_drop_trigger;
-		CREATE EVENT TRIGGER pg_flo_drop_trigger ON sql_drop
-		EXECUTE FUNCTION internal_pg_flo.ddl_trigger();
-
-		DROP EVENT TRIGGER IF EXISTS pg_flo_table_rewrite_trigger;
-		CREATE EVENT TRIGGER pg_flo_table_rewrite_trigger ON table_rewrite
-		EXECUTE FUNCTION internal_pg_flo.ddl_trigger();
-	`)
 	if err != nil {
 		d.BaseRepl.Logger.Error().Err(err).Msg("Failed to setup DDL tracking")
 		return err

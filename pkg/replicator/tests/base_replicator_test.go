@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ func TestBaseReplicator(t *testing.T) {
 			Password: "test_password",
 			Database: "test_db",
 			Group:    "test_group",
+			Schema:   "public",
 		}
 
 		br := replicator.NewBaseReplicator(config, mockReplicationConn, mockStandardConn, mockNATSClient)
@@ -81,35 +83,10 @@ func TestBaseReplicator(t *testing.T) {
 			mockStandardConn.AssertExpectations(t)
 		})
 
-		t.Run("Publication created for all tables", func(t *testing.T) {
-			mockStandardConn := new(MockStandardConnection)
-			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
-				Return(MockRow{
-					scanFunc: func(dest ...interface{}) error {
-						*dest[0].(*bool) = false
-						return nil
-					},
-				})
-			expectedQuery := `CREATE PUBLICATION "pg_flo_new_pub_publication" FOR ALL TABLES`
-			mockStandardConn.On("Exec", mock.Anything, expectedQuery, mock.Anything).
-				Return(pgconn.CommandTag{}, nil)
-
-			br := &replicator.BaseReplicator{
-				Config:       replicator.Config{Group: "new_pub"},
-				StandardConn: mockStandardConn,
-				Logger:       zerolog.Nop(),
-			}
-
-			err := br.CreatePublication()
-			assert.NoError(t, err)
-			mockStandardConn.AssertExpectations(t)
-		})
-
 		t.Run("Publication created for specific tables", func(t *testing.T) {
 			mockStandardConn := new(MockStandardConnection)
 
-			// Mock the check for existing publication
-			mockStandardConn.On("QueryRow", mock.Anything, mock.AnythingOfType("string"), mock.Anything).
+			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
 				Return(MockRow{
 					scanFunc: func(dest ...interface{}) error {
 						*dest[0].(*bool) = false
@@ -167,12 +144,40 @@ func TestBaseReplicator(t *testing.T) {
 						return nil
 					},
 				})
-			expectedQuery := `CREATE PUBLICATION "pg_flo_new_pub_publication" FOR ALL TABLES`
+
+			mockRows := new(MockRows)
+			mockRows.On("Next").Return(true).Once()
+			mockRows.On("Next").Return(false).Once()
+			mockRows.On("Scan", mock.AnythingOfType("*string")).Run(func(args mock.Arguments) {
+				*args.Get(0).(*string) = "public.users"
+			}).Return(nil)
+			mockRows.On("Close").Return().Once()
+			mockRows.On("Err").Return(nil).Maybe()
+
+			mockStandardConn.On("Query",
+				mock.Anything,
+				mock.MatchedBy(func(query string) bool {
+					normalizedQuery := strings.Join(strings.Fields(query), " ")
+					expectedQuery := strings.Join(strings.Fields(`
+															SELECT schemaname || '.' || tablename
+															FROM pg_tables
+															WHERE schemaname = $1
+															AND schemaname NOT IN ('pg_catalog', 'information_schema', 'internal_pg_flo')
+											`), " ")
+					return normalizedQuery == expectedQuery
+				}),
+				[]interface{}{"public"},
+			).Return(mockRows, nil)
+
+			expectedQuery := `CREATE PUBLICATION "pg_flo_new_pub_publication" FOR TABLE "public"."users"`
 			mockStandardConn.On("Exec", mock.Anything, expectedQuery, mock.Anything).
 				Return(pgconn.CommandTag{}, errors.New("creation error"))
 
 			br := &replicator.BaseReplicator{
-				Config:       replicator.Config{Group: "new_pub"},
+				Config: replicator.Config{
+					Group:  "new_pub",
+					Schema: "public",
+				},
 				StandardConn: mockStandardConn,
 				Logger:       zerolog.Nop(),
 			}
@@ -181,6 +186,67 @@ func TestBaseReplicator(t *testing.T) {
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to create publication")
 			mockStandardConn.AssertExpectations(t)
+			mockRows.AssertExpectations(t)
+		})
+
+		t.Run("Publication created for discovered tables", func(t *testing.T) {
+			mockStandardConn := new(MockStandardConnection)
+
+			mockStandardConn.On("QueryRow", mock.Anything, "SELECT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = $1)", mock.Anything).
+				Return(MockRow{
+					scanFunc: func(dest ...interface{}) error {
+						*dest[0].(*bool) = false
+						return nil
+					},
+				})
+
+			mockRows := new(MockRows)
+			mockRows.On("Next").Return(true).Times(2)
+			mockRows.On("Next").Return(false).Once()
+			var callCount int
+			mockRows.On("Scan", mock.AnythingOfType("*string")).Run(func(args mock.Arguments) {
+				if callCount == 0 {
+					*args.Get(0).(*string) = "public.users"
+					callCount++
+				} else {
+					*args.Get(0).(*string) = "public.orders"
+				}
+			}).Return(nil)
+			mockRows.On("Close").Return().Once()
+			mockRows.On("Err").Return(nil).Maybe()
+
+			mockStandardConn.On("Query",
+				mock.Anything,
+				mock.MatchedBy(func(query string) bool {
+					normalizedQuery := strings.Join(strings.Fields(query), " ")
+					expectedQuery := strings.Join(strings.Fields(`
+															SELECT schemaname || '.' || tablename
+															FROM pg_tables
+															WHERE schemaname = $1
+															AND schemaname NOT IN ('pg_catalog', 'information_schema', 'internal_pg_flo')
+											`), " ")
+					return normalizedQuery == expectedQuery
+				}),
+				[]interface{}{"public"},
+			).Return(mockRows, nil)
+
+			expectedQuery := `CREATE PUBLICATION "pg_flo_new_pub_publication" FOR TABLE "public"."users", "public"."orders"`
+			mockStandardConn.On("Exec", mock.Anything, expectedQuery, mock.Anything).
+				Return(pgconn.CommandTag{}, nil)
+
+			br := &replicator.BaseReplicator{
+				Config: replicator.Config{
+					Group:  "new_pub",
+					Schema: "public",
+				},
+				StandardConn: mockStandardConn,
+				Logger:       zerolog.Nop(),
+			}
+
+			err := br.CreatePublication()
+			assert.NoError(t, err)
+			mockStandardConn.AssertExpectations(t)
+			mockRows.AssertExpectations(t)
 		})
 	})
 

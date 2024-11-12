@@ -42,6 +42,10 @@ type BaseReplicator struct {
 
 // NewBaseReplicator creates a new BaseReplicator instance
 func NewBaseReplicator(config Config, replicationConn ReplicationConnection, standardConn StandardConnection, natsClient NATSClient) *BaseReplicator {
+	if config.Schema == "" {
+		config.Schema = "public"
+	}
+
 	logger := log.With().Str("component", "replicator").Logger()
 
 	br := &BaseReplicator{
@@ -78,6 +82,26 @@ func NewBaseReplicator(config Config, replicationConn ReplicationConnection, sta
 	return br
 }
 
+// buildCreatePublicationQuery constructs the SQL query for creating a publication
+func (r *BaseReplicator) buildCreatePublicationQuery() (string, error) {
+	publicationName := GeneratePublicationName(r.Config.Group)
+
+	tables, err := r.GetConfiguredTables(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("failed to get configured tables: %w", err)
+	}
+
+	sanitizedTables := make([]string, len(tables))
+	for i, table := range tables {
+		parts := strings.Split(table, ".")
+		sanitizedTables[i] = pgx.Identifier{parts[0], parts[1]}.Sanitize()
+	}
+
+	return fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s",
+		pgx.Identifier{publicationName}.Sanitize(),
+		strings.Join(sanitizedTables, ", ")), nil
+}
+
 // CreatePublication creates a new publication if it doesn't exist
 func (r *BaseReplicator) CreatePublication() error {
 	publicationName := GeneratePublicationName(r.Config.Group)
@@ -91,7 +115,11 @@ func (r *BaseReplicator) CreatePublication() error {
 		return nil
 	}
 
-	query := r.buildCreatePublicationQuery()
+	query, err := r.buildCreatePublicationQuery()
+	if err != nil {
+		return fmt.Errorf("failed to build publication query: %w", err)
+	}
+
 	_, err = r.StandardConn.Exec(context.Background(), query)
 	if err != nil {
 		return fmt.Errorf("failed to create publication: %w", err)
@@ -99,24 +127,6 @@ func (r *BaseReplicator) CreatePublication() error {
 
 	r.Logger.Info().Str("publication", publicationName).Msg("Publication created successfully")
 	return nil
-}
-
-// buildCreatePublicationQuery constructs the SQL query for creating a publication
-func (r *BaseReplicator) buildCreatePublicationQuery() string {
-	publicationName := GeneratePublicationName(r.Config.Group)
-	if len(r.Config.Tables) == 0 {
-		return fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES",
-			pgx.Identifier{publicationName}.Sanitize())
-	}
-
-	fullyQualifiedTables := make([]string, len(r.Config.Tables))
-	for i, table := range r.Config.Tables {
-		fullyQualifiedTables[i] = pgx.Identifier{r.Config.Schema, table}.Sanitize()
-	}
-
-	return fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s",
-		pgx.Identifier{publicationName}.Sanitize(),
-		strings.Join(fullyQualifiedTables, ", "))
 }
 
 // checkPublicationExists checks if a publication with the given name exists
@@ -558,4 +568,38 @@ func (r *BaseReplicator) CheckReplicationSlotStatus(ctx context.Context) error {
 	}
 	r.Logger.Info().Str("slotName", publicationName).Str("restartLSN", restartLSN).Msg("Replication slot status")
 	return nil
+}
+
+// GetConfiguredTables returns all tables based on configuration
+// If no specific tables are configured, returns all tables from the configured schema
+func (r *BaseReplicator) GetConfiguredTables(ctx context.Context) ([]string, error) {
+	if len(r.Config.Tables) > 0 {
+		fullyQualifiedTables := make([]string, len(r.Config.Tables))
+		for i, table := range r.Config.Tables {
+			fullyQualifiedTables[i] = fmt.Sprintf("%s.%s", r.Config.Schema, table)
+		}
+		return fullyQualifiedTables, nil
+	}
+
+	rows, err := r.StandardConn.Query(ctx, `
+		SELECT schemaname || '.' || tablename
+		FROM pg_tables
+		WHERE schemaname = $1
+		AND schemaname NOT IN ('pg_catalog', 'information_schema', 'internal_pg_flo')
+	`, r.Config.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tables: %v", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return nil, fmt.Errorf("failed to scan table name: %v", err)
+		}
+		tables = append(tables, tableName)
+	}
+
+	return tables, nil
 }

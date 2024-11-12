@@ -9,6 +9,7 @@ import (
 
 // NewReplicator creates a new Replicator based on the configuration
 func NewReplicator(config Config, natsClient *pgflonats.NATSClient, copyAndStream bool, copyOnly bool, maxCopyWorkersPerTable int) (Replicator, error) {
+
 	replicationConn := NewReplicationConnection(config)
 	if err := replicationConn.Connect(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to connect to database for replication: %v", err)
