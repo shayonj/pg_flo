@@ -31,8 +31,18 @@ func TestDDLReplicator(t *testing.T) {
 
 	t.Run("SetupDDLTracking", func(t *testing.T) {
 		mockStandardConn := &MockStandardConnection{}
+		mockBaseRepl := &replicator.BaseReplicator{
+			Logger:       zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger(),
+			StandardConn: mockStandardConn,
+			Config: replicator.Config{
+				Schema: "public",
+				Tables: []string{"test_table"},
+			},
+		}
+
 		ddlReplicator := &replicator.DDLReplicator{
-			DDLConn: mockStandardConn,
+			DDLConn:  mockStandardConn,
+			BaseRepl: mockBaseRepl,
 		}
 
 		ctx := context.Background()

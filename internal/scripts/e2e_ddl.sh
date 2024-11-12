@@ -3,11 +3,17 @@ set -euo pipefail
 
 source "$(dirname "$0")/e2e_common.sh"
 
-create_users() {
-  log "Creating initial test table..."
-  run_sql "DROP TABLE IF EXISTS public.users;"
-  run_sql "CREATE TABLE public.users (id serial PRIMARY KEY, data text);"
-  success "Initial test table created"
+create_test_tables() {
+  log "Creating test schemas and tables..."
+  run_sql "DROP SCHEMA IF EXISTS app CASCADE; CREATE SCHEMA app;"
+  run_sql "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
+
+  run_sql "CREATE TABLE app.users (id serial PRIMARY KEY, data text);"
+  run_sql "CREATE TABLE app.posts (id serial PRIMARY KEY, content text);"
+
+  run_sql "CREATE TABLE app.comments (id serial PRIMARY KEY, text text);"
+  run_sql "CREATE TABLE public.metrics (id serial PRIMARY KEY, value numeric);"
+  success "Test tables created"
 }
 
 start_pg_flo_replication() {
@@ -23,8 +29,8 @@ start_pg_flo_replication() {
     --user "$PG_USER" \
     --password "$PG_PASSWORD" \
     --group "group_ddl" \
-    --tables "users" \
-    --schema "public" \
+    --schema "app" \
+    --tables "users,posts" \
     --nats-url "$NATS_URL" \
     --track-ddl \
     >"$pg_flo_LOG" 2>&1 &
@@ -61,60 +67,169 @@ start_pg_flo_worker() {
 
 perform_ddl_operations() {
   log "Performing DDL operations..."
-  run_sql "ALTER TABLE users ADD COLUMN new_column int;"
-  run_sql "CREATE INDEX CONCURRENTLY idx_users_data ON users (data);"
-  run_sql "ALTER TABLE users RENAME COLUMN data TO old_data;"
-  run_sql "DROP INDEX idx_users_data;"
-  run_sql "ALTER TABLE users ADD COLUMN new_column_one int;"
-  run_sql "ALTER TABLE users ALTER COLUMN old_data TYPE varchar(255);"
+
+  # Column operations on tracked tables
+  run_sql "ALTER TABLE app.users ADD COLUMN email text;"
+  run_sql "ALTER TABLE app.users ADD COLUMN status varchar(50) DEFAULT 'active';"
+  run_sql "ALTER TABLE app.posts ADD COLUMN category text;"
+
+  # Index operations on tracked tables
+  run_sql "CREATE INDEX CONCURRENTLY idx_users_email ON app.users (email);"
+  run_sql "CREATE UNIQUE INDEX idx_posts_unique ON app.posts (content) WHERE content IS NOT NULL;"
+
+  # Column modifications on tracked tables
+  run_sql "ALTER TABLE app.users ALTER COLUMN status SET DEFAULT 'pending';"
+  run_sql "ALTER TABLE app.posts ALTER COLUMN category TYPE varchar(100);"
+
+  # Rename operations on tracked tables
+  run_sql "ALTER TABLE app.users RENAME COLUMN data TO profile;"
+
+  # Drop operations on tracked tables
+  run_sql "DROP INDEX CONCURRENTLY IF EXISTS idx_users_email;"
+  run_sql "ALTER TABLE app.posts DROP COLUMN IF EXISTS category;"
+
+  # Operations on non-tracked tables (should be ignored)
+  run_sql "ALTER TABLE app.comments ADD COLUMN author text;"
+  run_sql "CREATE INDEX idx_comments_text ON app.comments (text);"
+  run_sql "ALTER TABLE public.metrics ADD COLUMN timestamp timestamptz;"
+
   success "DDL operations performed"
 }
 
 verify_ddl_changes() {
-  log "Verifying DDL changes..."
+  log "Verifying DDL changes in target database..."
+  local failures=0
 
-  # Check table structure in target database
-  local new_column_exists=$(run_sql_target "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'new_column';")
-  local new_column_one_exists=$(run_sql_target "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'new_column_one';")
-  local old_data_type=$(run_sql_target "SELECT data_type FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'old_data';")
-  old_data_type=$(echo "$old_data_type" | xargs)
+  check_column() {
+    local table=$1
+    local column=$2
+    local expected_exists=$3
+    local expected_type=${4:-""}
+    local expected_default=${5:-""}
+    local query="
+      SELECT COUNT(*),
+             data_type,
+             character_maximum_length,
+             column_default
+      FROM information_schema.columns
+      WHERE table_schema='app'
+        AND table_name='$table'
+        AND column_name='$column'
+      GROUP BY data_type, character_maximum_length, column_default;"
 
-  if [ "$new_column_exists" -eq 1 ]; then
-    success "new_column exists in target database"
-  else
-    error "new_column does not exist in target database"
-    return 1
-  fi
+    local result
+    result=$(run_sql_target "$query")
 
-  if [ "$new_column_one_exists" -eq 1 ]; then
-    success "new_column_one exists in target database"
-  else
-    error "new_column_one does not exist in target database"
-    return 1
-  fi
+    if [ -z "$result" ]; then
+      exists=0
+      data_type=""
+      char_length=""
+      default_value=""
+    else
+      read exists data_type char_length default_value < <(echo "$result" | tr '|' ' ')
+    fi
 
-  if [ "$old_data_type" = "character varying" ]; then
-    success "old_data column type is character varying"
-  else
-    error "old_data column type is not character varying (got: '$old_data_type')"
-    return 1
-  fi
+    exists=${exists:-0}
 
-  # Check if internal table is empty
+    if [ "$exists" -eq "$expected_exists" ]; then
+      if [ "$expected_exists" -eq 1 ]; then
+        local type_ok=true
+        local default_ok=true
+
+        if [ -n "$expected_type" ]; then
+          # Handle character varying type specifically
+          if [ "$expected_type" = "character varying" ]; then
+            if [ "$data_type" = "character varying" ] || [ "$data_type" = "varchar" ] || [ "$data_type" = "character" ]; then
+              type_ok=true
+            else
+              type_ok=false
+            fi
+          elif [ "$data_type" != "$expected_type" ]; then
+            type_ok=false
+          fi
+        fi
+
+        if [ -n "$expected_default" ]; then
+          if [[ "$default_value" == *"$expected_default"* ]]; then
+            default_ok=true
+          else
+            default_ok=false
+          fi
+        fi
+
+        if [ "$type_ok" = true ] && [ "$default_ok" = true ]; then
+          if [[ "$expected_type" == "character varying" && -n "$char_length" ]]; then
+            success "Column app.$table.$column verification passed (type: $data_type($char_length), default: $default_value)"
+          else
+            success "Column app.$table.$column verification passed (type: $data_type, default: $default_value)"
+          fi
+        else
+          if [ "$type_ok" = false ]; then
+            error "Column app.$table.$column type mismatch (expected: $expected_type, got: $data_type)"
+            failures=$((failures + 1))
+          fi
+          if [ "$default_ok" = false ]; then
+            error "Column app.$table.$column default value mismatch (expected: $expected_default, got: $default_value)"
+            failures=$((failures + 1))
+          fi
+        fi
+      else
+        success "Column app.$table.$column verification passed (not exists)"
+      fi
+    else
+      error "Column app.$table.$column verification failed (expected: $expected_exists, got: $exists)"
+      failures=$((failures + 1))
+    fi
+  }
+
+  check_index() {
+    local index=$1
+    local expected=$2
+    local exists=$(run_sql_target "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='app' AND indexname='$index';")
+
+    if [ "$exists" -eq "$expected" ]; then
+      success "Index app.$index verification passed (expected: $expected)"
+    else
+      error "Index app.$index verification failed (expected: $expected, got: $exists)"
+      failures=$((failures + 1))
+    fi
+  }
+
+  # Verify app.users changes
+  check_column "users" "email" 1 "text"
+  check_column "users" "status" 1 "character varying" "'pending'"
+  check_column "users" "data" 0
+  check_column "users" "profile" 1 "text"
+
+  # Verify app.posts changes
+  check_column "posts" "category" 0
+  check_column "posts" "content" 1 "text"
+  check_index "idx_posts_unique" 1 "unique"
+
+  # Verify non-tracked tables
+  check_column "comments" "author" 0
+  check_index "idx_comments_text" 0
+
   local remaining_rows=$(run_sql "SELECT COUNT(*) FROM internal_pg_flo.ddl_log;")
   if [ "$remaining_rows" -eq 0 ]; then
     success "internal_pg_flo.ddl_log table is empty"
   else
     error "internal_pg_flo.ddl_log table is not empty. Remaining rows: $remaining_rows"
-    return 1
+    failures=$((failures + 1))
   fi
 
-  return 0
+  if [ "$failures" -eq 0 ]; then
+    success "All DDL changes verified successfully"
+    return 0
+  else
+    error "DDL verification failed with $failures errors"
+    return 1
+  fi
 }
 
 test_pg_flo_ddl() {
   setup_postgres
-  create_users
+  create_test_tables
   start_pg_flo_worker
   sleep 5
   start_pg_flo_replication
