@@ -26,8 +26,8 @@ func TestTransformRules(t *testing.T) {
 				"pattern": "@example\\.com$",
 				"replace": "@masked.com",
 			}),
-			input:          createCDCMessage("INSERT", "email", pgtype.TextOID, "user@example.com"),
-			expectedOutput: createCDCMessage("INSERT", "email", pgtype.TextOID, "user@masked.com"),
+			input:          createCDCMessage(utils.OperationInsert, "email", pgtype.TextOID, "user@example.com"),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "email", pgtype.TextOID, "user@masked.com"),
 		},
 		{
 			name: "Mask Transform - Credit Card",
@@ -35,8 +35,8 @@ func TestTransformRules(t *testing.T) {
 				"type":      "mask",
 				"mask_char": "*",
 			}),
-			input:          createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "1234567890123456"),
-			expectedOutput: createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "1**************6"),
+			input:          createCDCMessage(utils.OperationInsert, "credit_card", pgtype.TextOID, "1234567890123456"),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "credit_card", pgtype.TextOID, "1**************6"),
 		},
 		{
 			name: "Regex Transform - Phone Number",
@@ -45,8 +45,8 @@ func TestTransformRules(t *testing.T) {
 				"pattern": "(\\d{3})(\\d{3})(\\d{4})",
 				"replace": "($1) $2-$3",
 			}),
-			input:          createCDCMessage("UPDATE", "phone", pgtype.TextOID, "1234567890"),
-			expectedOutput: createCDCMessage("UPDATE", "phone", pgtype.TextOID, "(123) 456-7890"),
+			input:          createCDCMessage(utils.OperationUpdate, "phone", pgtype.TextOID, "1234567890"),
+			expectedOutput: createCDCMessage(utils.OperationUpdate, "phone", pgtype.TextOID, "(123) 456-7890"),
 		},
 		{
 			name: "Regex Transform - No Match",
@@ -55,8 +55,8 @@ func TestTransformRules(t *testing.T) {
 				"pattern": "@example\\.com$",
 				"replace": "@masked.com",
 			}),
-			input:          createCDCMessage("INSERT", "email", pgtype.TextOID, "user@otherdomain.com"),
-			expectedOutput: createCDCMessage("INSERT", "email", pgtype.TextOID, "user@otherdomain.com"),
+			input:          createCDCMessage(utils.OperationInsert, "email", pgtype.TextOID, "user@otherdomain.com"),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "email", pgtype.TextOID, "user@otherdomain.com"),
 		},
 		{
 			name: "Mask Transform - Short String",
@@ -64,8 +64,8 @@ func TestTransformRules(t *testing.T) {
 				"type":      "mask",
 				"mask_char": "*",
 			}),
-			input:          createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "12"),
-			expectedOutput: createCDCMessage("INSERT", "credit_card", pgtype.TextOID, "12"),
+			input:          createCDCMessage(utils.OperationInsert, "credit_card", pgtype.TextOID, "12"),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "credit_card", pgtype.TextOID, "12"),
 		},
 		{
 			name: "Regex Transform - Non-String Input",
@@ -74,8 +74,8 @@ func TestTransformRules(t *testing.T) {
 				"pattern": "^\\d+\\.\\d{2}$",
 				"replace": "$.$$",
 			}),
-			input:          createCDCMessage("UPDATE", "price", pgtype.Float8OID, 99.99),
-			expectedOutput: createCDCMessage("UPDATE", "price", pgtype.Float8OID, 99.99),
+			input:          createCDCMessage(utils.OperationUpdate, "price", pgtype.Float8OID, 99.99),
+			expectedOutput: createCDCMessage(utils.OperationUpdate, "price", pgtype.Float8OID, 99.99),
 		},
 	}
 
@@ -101,8 +101,8 @@ func TestFilterRules(t *testing.T) {
 				"operator": "eq",
 				"value":    "completed",
 			}),
-			input:          createCDCMessage("INSERT", "status", pgtype.TextOID, "completed"),
-			expectedOutput: createCDCMessage("INSERT", "status", pgtype.TextOID, "completed"),
+			input:          createCDCMessage(utils.OperationInsert, "status", pgtype.TextOID, "completed"),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "status", pgtype.TextOID, "completed"),
 		},
 		{
 			name: "Equal Filter (Text) - Fail",
@@ -110,7 +110,7 @@ func TestFilterRules(t *testing.T) {
 				"operator": "eq",
 				"value":    "completed",
 			}),
-			input:          createCDCMessage("INSERT", "status", pgtype.TextOID, "pending"),
+			input:          createCDCMessage(utils.OperationInsert, "status", pgtype.TextOID, "pending"),
 			expectedOutput: nil,
 		},
 		{
@@ -119,8 +119,8 @@ func TestFilterRules(t *testing.T) {
 				"operator": "gt",
 				"value":    10,
 			}),
-			input:          createCDCMessage("UPDATE", "stock", pgtype.Int4OID, 15),
-			expectedOutput: createCDCMessage("UPDATE", "stock", pgtype.Int4OID, 15),
+			input:          createCDCMessage(utils.OperationUpdate, "stock", pgtype.Int4OID, 15),
+			expectedOutput: createCDCMessage(utils.OperationUpdate, "stock", pgtype.Int4OID, 15),
 		},
 		{
 			name: "Less Than Filter (Float) - Pass",
@@ -128,8 +128,8 @@ func TestFilterRules(t *testing.T) {
 				"operator": "lt",
 				"value":    100.0,
 			}),
-			input:          createCDCMessage("INSERT", "amount", pgtype.Float8OID, 99.99),
-			expectedOutput: createCDCMessage("INSERT", "amount", pgtype.Float8OID, 99.99),
+			input:          createCDCMessage(utils.OperationInsert, "amount", pgtype.Float8OID, 99.99),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "amount", pgtype.Float8OID, 99.99),
 		},
 		{
 			name: "Contains Filter (Text) - Pass",
@@ -137,8 +137,8 @@ func TestFilterRules(t *testing.T) {
 				"operator": "contains",
 				"value":    "Premium",
 			}),
-			input:          createCDCMessage("INSERT", "name", pgtype.TextOID, "Premium Widget"),
-			expectedOutput: createCDCMessage("INSERT", "name", pgtype.TextOID, "Premium Widget"),
+			input:          createCDCMessage(utils.OperationInsert, "name", pgtype.TextOID, "Premium Widget"),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "name", pgtype.TextOID, "Premium Widget"),
 		},
 		{
 			name: "Equal Filter (Case Insensitive) - Pass",
@@ -146,7 +146,7 @@ func TestFilterRules(t *testing.T) {
 				"operator": "eq",
 				"value":    "Electronics",
 			}),
-			input:          createCDCMessage("INSERT", "category", pgtype.TextOID, "electronics"),
+			input:          createCDCMessage(utils.OperationInsert, "category", pgtype.TextOID, "electronics"),
 			expectedOutput: nil,
 		},
 		{
@@ -155,8 +155,8 @@ func TestFilterRules(t *testing.T) {
 				"operator": "gt",
 				"value":    "5",
 			}),
-			input:          createCDCMessage("UPDATE", "quantity", pgtype.Int4OID, 10),
-			expectedOutput: createCDCMessage("UPDATE", "quantity", pgtype.Int4OID, 10),
+			input:          createCDCMessage(utils.OperationUpdate, "quantity", pgtype.Int4OID, 10),
+			expectedOutput: createCDCMessage(utils.OperationUpdate, "quantity", pgtype.Int4OID, 10),
 		},
 		{
 			name: "Less Than Filter (Float vs Integer) - Pass",
@@ -164,8 +164,8 @@ func TestFilterRules(t *testing.T) {
 				"operator": "lt",
 				"value":    100,
 			}),
-			input:          createCDCMessage("INSERT", "price", pgtype.Float8OID, 99.99),
-			expectedOutput: createCDCMessage("INSERT", "price", pgtype.Float8OID, 99.99),
+			input:          createCDCMessage(utils.OperationInsert, "price", pgtype.Float8OID, 99.99),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "price", pgtype.Float8OID, 99.99),
 		},
 		{
 			name: "Contains Filter (Case Sensitive) - Fail",
@@ -173,7 +173,7 @@ func TestFilterRules(t *testing.T) {
 				"operator": "contains",
 				"value":    "John",
 			}),
-			input:          createCDCMessage("INSERT", "name", pgtype.TextOID, "john doe"),
+			input:          createCDCMessage(utils.OperationInsert, "name", pgtype.TextOID, "john doe"),
 			expectedOutput: nil,
 		},
 	}
@@ -203,8 +203,8 @@ func TestDateTimeFilters(t *testing.T) {
 				"operator": "gt",
 				"value":    pastDate.Format(time.RFC3339),
 			}),
-			input:          createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now),
-			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now),
+			input:          createCDCMessage(utils.OperationInsert, "date", pgtype.TimestamptzOID, now),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "date", pgtype.TimestamptzOID, now),
 		},
 		{
 			name: "Less Than or Equal Date Filter - Pass",
@@ -212,8 +212,8 @@ func TestDateTimeFilters(t *testing.T) {
 				"operator": "lte",
 				"value":    now.Format(time.RFC3339),
 			}),
-			input:          createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, pastDate),
-			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, pastDate),
+			input:          createCDCMessage(utils.OperationInsert, "date", pgtype.TimestamptzOID, pastDate),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "date", pgtype.TimestamptzOID, pastDate),
 		},
 		{
 			name: "Equal Date Filter (Different Timezone) - Pass",
@@ -221,8 +221,8 @@ func TestDateTimeFilters(t *testing.T) {
 				"operator": "eq",
 				"value":    now.UTC().Format(time.RFC3339),
 			}),
-			input:          createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now.In(time.FixedZone("EST", -5*60*60))),
-			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TimestamptzOID, now.In(time.FixedZone("EST", -5*60*60))),
+			input:          createCDCMessage(utils.OperationInsert, "date", pgtype.TimestamptzOID, now.In(time.FixedZone("EST", -5*60*60))),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "date", pgtype.TimestamptzOID, now.In(time.FixedZone("EST", -5*60*60))),
 		},
 		{
 			name: "Greater Than Date Filter (String Input) - Fail",
@@ -230,8 +230,8 @@ func TestDateTimeFilters(t *testing.T) {
 				"operator": "gt",
 				"value":    pastDate.Format(time.RFC3339),
 			}),
-			input:          createCDCMessage("INSERT", "date", pgtype.TextOID, now.Format(time.RFC3339)),
-			expectedOutput: createCDCMessage("INSERT", "date", pgtype.TextOID, now.Format(time.RFC3339)),
+			input:          createCDCMessage(utils.OperationInsert, "date", pgtype.TextOID, now.Format(time.RFC3339)),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "date", pgtype.TextOID, now.Format(time.RFC3339)),
 		},
 	}
 
@@ -257,8 +257,8 @@ func TestBooleanFilters(t *testing.T) {
 				"operator": "eq",
 				"value":    true,
 			}),
-			input:          createCDCMessage("INSERT", "is_active", pgtype.BoolOID, true),
-			expectedOutput: createCDCMessage("INSERT", "is_active", pgtype.BoolOID, true),
+			input:          createCDCMessage(utils.OperationInsert, "is_active", pgtype.BoolOID, true),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "is_active", pgtype.BoolOID, true),
 		},
 		{
 			name: "Not Equal Boolean Filter - Pass",
@@ -266,8 +266,8 @@ func TestBooleanFilters(t *testing.T) {
 				"operator": "ne",
 				"value":    true,
 			}),
-			input:          createCDCMessage("UPDATE", "is_deleted", pgtype.BoolOID, false),
-			expectedOutput: createCDCMessage("UPDATE", "is_deleted", pgtype.BoolOID, false),
+			input:          createCDCMessage(utils.OperationUpdate, "is_deleted", pgtype.BoolOID, false),
+			expectedOutput: createCDCMessage(utils.OperationUpdate, "is_deleted", pgtype.BoolOID, false),
 		},
 		{
 			name: "Equal Boolean Filter (String Input) - Pass",
@@ -275,7 +275,7 @@ func TestBooleanFilters(t *testing.T) {
 				"operator": "eq",
 				"value":    true,
 			}),
-			input:          createCDCMessage("INSERT", "is_active", pgtype.TextOID, "true"),
+			input:          createCDCMessage(utils.OperationInsert, "is_active", pgtype.TextOID, "true"),
 			expectedOutput: nil,
 		},
 		{
@@ -284,7 +284,7 @@ func TestBooleanFilters(t *testing.T) {
 				"operator": "ne",
 				"value":    false,
 			}),
-			input:          createCDCMessage("UPDATE", "is_deleted", pgtype.Int4OID, 0),
+			input:          createCDCMessage(utils.OperationUpdate, "is_deleted", pgtype.Int4OID, 0),
 			expectedOutput: nil,
 		},
 	}
@@ -311,8 +311,8 @@ func TestNumericFilters(t *testing.T) {
 				"operator": "gte",
 				"value":    "99.99",
 			}),
-			input:          createCDCMessage("INSERT", "price", pgtype.NumericOID, "100.00"),
-			expectedOutput: createCDCMessage("INSERT", "price", pgtype.NumericOID, "100.00"),
+			input:          createCDCMessage(utils.OperationInsert, "price", pgtype.NumericOID, "100.00"),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "price", pgtype.NumericOID, "100.00"),
 		},
 		{
 			name: "Less Than Numeric Filter - Pass",
@@ -320,8 +320,8 @@ func TestNumericFilters(t *testing.T) {
 				"operator": "lt",
 				"value":    "1000.00",
 			}),
-			input:          createCDCMessage("UPDATE", "total", pgtype.NumericOID, "999.99"),
-			expectedOutput: createCDCMessage("UPDATE", "total", pgtype.NumericOID, "999.99"),
+			input:          createCDCMessage(utils.OperationUpdate, "total", pgtype.NumericOID, "999.99"),
+			expectedOutput: createCDCMessage(utils.OperationUpdate, "total", pgtype.NumericOID, "999.99"),
 		},
 		{
 			name: "Less Than Numeric Filter (String Input) - Fail",
@@ -329,7 +329,7 @@ func TestNumericFilters(t *testing.T) {
 				"operator": "lt",
 				"value":    1000.00,
 			}),
-			input:          createCDCMessage("UPDATE", "total", pgtype.TextOID, "999.99"),
+			input:          createCDCMessage(utils.OperationUpdate, "total", pgtype.TextOID, "999.99"),
 			expectedOutput: nil,
 		},
 		{
@@ -338,8 +338,8 @@ func TestNumericFilters(t *testing.T) {
 				"operator": "eq",
 				"value":    1.23,
 			}),
-			input:          createCDCMessage("INSERT", "weight", pgtype.Float8OID, 1.2300000001),
-			expectedOutput: createCDCMessage("INSERT", "weight", pgtype.Float8OID, 1.2300000001),
+			input:          createCDCMessage(utils.OperationInsert, "weight", pgtype.Float8OID, 1.2300000001),
+			expectedOutput: createCDCMessage(utils.OperationInsert, "weight", pgtype.Float8OID, 1.2300000001),
 		},
 	}
 
@@ -372,7 +372,7 @@ func createRule(t *testing.T, ruleType, table, column string, params map[string]
 	return rule
 }
 
-func createCDCMessage(opType, columnName string, dataType uint32, value interface{}) *utils.CDCMessage {
+func createCDCMessage(opType utils.OperationType, columnName string, dataType uint32, value interface{}) *utils.CDCMessage {
 	return &utils.CDCMessage{
 		Type: opType,
 		Columns: []*pglogrepl.RelationMessageColumn{

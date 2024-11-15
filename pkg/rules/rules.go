@@ -78,7 +78,7 @@ func NewRegexTransformRule(table, column string, params map[string]interface{}) 
 	}
 
 	transform := func(m *utils.CDCMessage) (*utils.CDCMessage, error) {
-		value, err := m.GetColumnValue(column)
+		value, err := m.GetColumnValue(column, false)
 		if err != nil {
 			return m, nil
 		}
@@ -109,7 +109,7 @@ func NewMaskTransformRule(table, column string, params map[string]interface{}) (
 	}
 
 	transform := func(m *utils.CDCMessage) (*utils.CDCMessage, error) {
-		value, err := m.GetColumnValue(column)
+		value, err := m.GetColumnValue(column, false)
 		if err != nil {
 			return m, nil
 		}
@@ -179,7 +179,8 @@ func NewFilterRule(table, column string, params map[string]interface{}) (Rule, e
 // NewComparisonCondition creates a new comparison condition function
 func NewComparisonCondition(column, operator string, value interface{}) func(*utils.CDCMessage) bool {
 	return func(m *utils.CDCMessage) bool {
-		columnValue, err := m.GetColumnValue(column)
+		useOldValues := m.Type == utils.OperationDelete
+		columnValue, err := m.GetColumnValue(column, useOldValues)
 		if err != nil {
 			return false
 		}
@@ -261,7 +262,8 @@ func NewComparisonCondition(column, operator string, value interface{}) func(*ut
 // NewContainsCondition creates a new contains condition function
 func NewContainsCondition(column string, value interface{}) func(*utils.CDCMessage) bool {
 	return func(m *utils.CDCMessage) bool {
-		columnValue, err := m.GetColumnValue(column)
+		useOldValues := m.Type == utils.OperationDelete
+		columnValue, err := m.GetColumnValue(column, useOldValues)
 		if err != nil {
 			return false
 		}
@@ -356,12 +358,12 @@ func compareNumericValues(a, b string, operator string) bool {
 
 // Apply applies the transform rule to the provided data
 func (r *TransformRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, error) {
-	if !containsOperation(r.Operations, utils.OperationType(message.Type)) {
+	if !containsOperation(r.Operations, message.Type) {
 		return message, nil
 	}
 
 	// Don't apply rule if asked not to
-	if message.Type == "DELETE" && r.AllowEmptyDeletes {
+	if message.Type == utils.OperationDelete && r.AllowEmptyDeletes {
 		return message, nil
 	}
 
@@ -370,16 +372,17 @@ func (r *TransformRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, err
 
 // Apply applies the filter rule to the provided data
 func (r *FilterRule) Apply(message *utils.CDCMessage) (*utils.CDCMessage, error) {
-	if !containsOperation(r.Operations, utils.OperationType(message.Type)) {
+	if !containsOperation(r.Operations, message.Type) {
 		return message, nil
 	}
 
 	// Don't apply rule if asked not to
-	if message.Type == "DELETE" && r.AllowEmptyDeletes {
+	if message.Type == utils.OperationDelete && r.AllowEmptyDeletes {
 		return message, nil
 	}
 
 	passes := r.Condition(message)
+
 	logger.Debug().
 		Str("column", r.ColumnName).
 		Any("operation", message.Type).

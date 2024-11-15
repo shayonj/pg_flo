@@ -120,59 +120,155 @@ func (s *PostgresSink) handleInsert(tx pgx.Tx, message *utils.CDCMessage) error 
 	values := make([]interface{}, 0, len(message.Columns))
 
 	for i, col := range message.Columns {
+		value, err := message.GetColumnValue(col.Name, false)
+		if err != nil {
+			return fmt.Errorf("failed to get column value: %w", err)
+		}
 		columns = append(columns, col.Name)
 		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
-		value, err := message.GetDecodedColumnValue(col.Name)
-		if err != nil {
-			return fmt.Errorf("failed to get column value: %v", err)
-		}
 		values = append(values, value)
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING",
+	query := fmt.Sprintf(
+		"INSERT INTO %s.%s (%s) VALUES (%s)",
 		message.Schema,
 		message.Table,
-		strings.Join(columns, ","),
-		strings.Join(placeholders, ","),
-		message.PrimaryKeyColumn,
+		strings.Join(columns, ", "),
+		strings.Join(placeholders, ", "),
 	)
 
+	// Add ON CONFLICT clause for PK/UNIQUE keys
+	if message.ReplicationKey.Type != utils.ReplicationKeyFull && len(message.ReplicationKey.Columns) > 0 {
+		query += fmt.Sprintf(" ON CONFLICT (%s) DO NOTHING",
+			strings.Join(message.ReplicationKey.Columns, ", "))
+	}
+
 	_, err := tx.Exec(context.Background(), query, values...)
-	return err
+	if err != nil {
+		return fmt.Errorf("insert failed: %w", err)
+	}
+	return nil
+}
+
+// getWhereConditions builds WHERE clause conditions based on the replication key type
+func getWhereConditions(message *utils.CDCMessage, useOldValues bool, startingIndex int) ([]string, []interface{}, error) {
+	var conditions []string
+	var values []interface{}
+	valueIndex := startingIndex
+
+	switch message.ReplicationKey.Type {
+	case utils.ReplicationKeyFull:
+		// For FULL, use all non-null values
+		for _, col := range message.Columns {
+			value, err := message.GetColumnValue(col.Name, useOldValues)
+			if err != nil {
+				continue // Skip columns with errors
+			}
+			if value == nil {
+				conditions = append(conditions, fmt.Sprintf("%s IS NULL", col.Name))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s = $%d", col.Name, valueIndex))
+				values = append(values, value)
+				valueIndex++
+			}
+		}
+	case utils.ReplicationKeyPK, utils.ReplicationKeyUnique:
+		// For PK/UNIQUE, use only the key columns
+		for _, colName := range message.ReplicationKey.Columns {
+			value, err := message.GetColumnValue(colName, useOldValues)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to get value for key column %s: %w", colName, err)
+			}
+			if value == nil {
+				conditions = append(conditions, fmt.Sprintf("%s IS NULL", colName))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s = $%d", colName, valueIndex))
+				values = append(values, value)
+				valueIndex++
+			}
+		}
+	}
+
+	if len(conditions) == 0 {
+		return nil, nil, fmt.Errorf("no valid conditions generated for WHERE clause")
+	}
+
+	return conditions, values, nil
+}
+
+// handleDelete processes a delete operation
+func (s *PostgresSink) handleDelete(tx pgx.Tx, message *utils.CDCMessage) error {
+	if !message.ReplicationKey.IsValid() {
+		return fmt.Errorf("invalid replication key configuration")
+	}
+
+	startingIndex := 1
+	whereConditions, whereValues, err := getWhereConditions(message, true, startingIndex)
+	if err != nil {
+		return fmt.Errorf("failed to build WHERE conditions: %w", err)
+	}
+
+	query := fmt.Sprintf("DELETE FROM %s.%s WHERE %s",
+		message.Schema,
+		message.Table,
+		strings.Join(whereConditions, " AND "),
+	)
+
+	result, err := tx.Exec(context.Background(), query, whereValues...)
+	if err != nil {
+		return fmt.Errorf("delete failed: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		log.Warn().
+			Str("table", message.Table).
+			Str("query", query).
+			Interface("values", whereValues).
+			Msg("Delete affected 0 rows")
+	}
+
+	return nil
 }
 
 // handleUpdate processes an update operation
 func (s *PostgresSink) handleUpdate(tx pgx.Tx, message *utils.CDCMessage) error {
+	if !message.ReplicationKey.IsValid() {
+		return fmt.Errorf("invalid replication key configuration")
+	}
+
 	setClauses := make([]string, 0, len(message.Columns))
-	values := make([]interface{}, 0, len(message.Columns))
-	whereConditions := make([]string, 0)
+	setValues := make([]interface{}, 0, len(message.Columns))
 	valueIndex := 1
 
-	for _, col := range message.Columns {
-		if message.IsColumnToasted(col.Name) {
-			// Skip TOAST columns that haven't changed
+	for _, column := range message.Columns {
+		// Skip toasted columns
+		if message.IsColumnToasted(column.Name) {
 			continue
 		}
 
-		newValue, err := message.GetColumnValue(col.Name)
+		// Get the new value for the column
+		value, err := message.GetColumnValue(column.Name, false)
 		if err != nil {
-			return fmt.Errorf("failed to get column value: %v", err)
+			return fmt.Errorf("failed to get column value: %w", err)
 		}
 
-		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col.Name, valueIndex))
-		values = append(values, newValue)
-		valueIndex++
-
-		if col.Name == message.PrimaryKeyColumn {
-			whereConditions = append(whereConditions, fmt.Sprintf("%s = $%d", col.Name, valueIndex))
-			values = append(values, newValue) // Use the same value for the WHERE clause
+		if value == nil {
+			setClauses = append(setClauses, fmt.Sprintf("%s = NULL", column.Name))
+		} else {
+			setClauses = append(setClauses, fmt.Sprintf("%s = $%d", column.Name, valueIndex))
+			setValues = append(setValues, value)
 			valueIndex++
 		}
 	}
 
 	if len(setClauses) == 0 {
-		// If there are no columns to update (all were TOAST and unchanged), we can skip this update
+		log.Debug().Msg("No columns to update, skipping")
 		return nil
+	}
+
+	whereConditions, whereValues, err := getWhereConditions(message, true, valueIndex)
+	if err != nil {
+		return fmt.Errorf("failed to build WHERE conditions: %w", err)
 	}
 
 	query := fmt.Sprintf(
@@ -183,30 +279,22 @@ func (s *PostgresSink) handleUpdate(tx pgx.Tx, message *utils.CDCMessage) error 
 		strings.Join(whereConditions, " AND "),
 	)
 
-	_, err := tx.Exec(context.Background(), query, values...)
+	values := append(setValues, whereValues...)
+	result, err := tx.Exec(context.Background(), query, values...)
 	if err != nil {
-		return fmt.Errorf("failed to execute update query: %v", err)
+		return fmt.Errorf("update failed for table %s.%s: %w (query: %s, values: %v)",
+			message.Schema, message.Table, err, query, values)
+	}
+
+	if result.RowsAffected() == 0 {
+		log.Warn().
+			Str("table", message.Table).
+			Str("query", query).
+			Interface("values", values).
+			Msg("Update affected 0 rows")
 	}
 
 	return nil
-}
-
-// handleDelete processes a delete operation
-func (s *PostgresSink) handleDelete(tx pgx.Tx, message *utils.CDCMessage) error {
-	if message.PrimaryKeyColumn == "" {
-		return fmt.Errorf("primary key column not specified in the message")
-	}
-
-	pkValue, err := message.GetColumnValue(message.PrimaryKeyColumn)
-	if err != nil {
-		return fmt.Errorf("failed to get primary key value: %v", err)
-	}
-
-	query := fmt.Sprintf("DELETE FROM %s.%s WHERE %s = $1",
-		message.Schema, message.Table, message.PrimaryKeyColumn)
-
-	_, err = tx.Exec(context.Background(), query, pkValue)
-	return err
 }
 
 // handleDDL processes a DDL operation
@@ -222,7 +310,7 @@ func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) (pgx.Tx, 
 		tx = newTx
 	}
 
-	ddlCommand, err := message.GetColumnValue("ddl_command")
+	ddlCommand, err := message.GetColumnValue("ddl_command", false)
 	if err != nil {
 		return tx, fmt.Errorf("failed to get DDL command: %v", err)
 	}
@@ -304,9 +392,6 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 
 	if s.disableForeignKeyChecks {
 		if err := s.disableForeignKeys(ctx); err != nil {
-			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-				log.Error().Err(rollbackErr).Msg("failed to rollback transaction")
-			}
 			return fmt.Errorf("failed to disable foreign key checks: %v", err)
 		}
 		defer func() {
@@ -317,10 +402,6 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 	}
 
 	for _, message := range messages {
-		primaryKeyColumn := message.MappedPrimaryKeyColumn
-		if primaryKeyColumn != "" {
-			message.PrimaryKeyColumn = message.MappedPrimaryKeyColumn
-		}
 
 		var operationErr error
 		err := utils.WithRetry(ctx, s.retryConfig, func() error {
@@ -328,7 +409,6 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 				if err := s.connect(ctx); err != nil {
 					return fmt.Errorf("failed to reconnect to database: %v", err)
 				}
-				// Start a new transaction if needed
 				if tx == nil {
 					newTx, err := s.conn.Begin(ctx)
 					if err != nil {
@@ -339,18 +419,18 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 			}
 
 			switch message.Type {
-			case "INSERT":
+			case utils.OperationInsert:
 				operationErr = s.handleInsert(tx, message)
-			case "UPDATE":
+			case utils.OperationUpdate:
 				operationErr = s.handleUpdate(tx, message)
-			case "DELETE":
+			case utils.OperationDelete:
 				operationErr = s.handleDelete(tx, message)
-			case "DDL":
+			case utils.OperationDDL:
 				var newTx pgx.Tx
 				newTx, operationErr = s.handleDDL(tx, message)
 				tx = newTx
 			default:
-				operationErr = fmt.Errorf("unknown event type: %s", message.Type)
+				operationErr = fmt.Errorf("unknown operation type: %s", message.Type)
 			}
 
 			if operationErr != nil && isConnectionError(operationErr) {
@@ -366,7 +446,13 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 				}
 			}
 			tx = nil
-			return fmt.Errorf("failed to handle %s: %v-%v", message.Type, err, operationErr)
+			return fmt.Errorf("failed to handle %s for table %s.%s: %v-%v",
+				message.Type,
+				message.Schema,
+				message.Table,
+				err,
+				operationErr,
+			)
 		}
 	}
 

@@ -21,7 +21,7 @@ func TestOIDToString(t *testing.T) {
 func TestCDCBinaryEncoding(t *testing.T) {
 	t.Run("Encode and decode preserves CDC types", func(t *testing.T) {
 		testData := utils.CDCMessage{
-			Type:   "INSERT",
+			Type:   utils.OperationInsert,
 			Schema: "public",
 			Table:  "users",
 			Columns: []*pglogrepl.RelationMessageColumn{
@@ -62,7 +62,7 @@ func TestBinaryEncodingComplexTypes(t *testing.T) {
 		textArrayValue := []byte("{hello,world}")
 
 		testData := utils.CDCMessage{
-			Type:   "INSERT",
+			Type:   utils.OperationInsert,
 			Schema: "public",
 			Table:  "complex_types",
 			Columns: []*pglogrepl.RelationMessageColumn{

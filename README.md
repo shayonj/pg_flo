@@ -232,6 +232,38 @@ pg_flo worker postgres --group inventory
 - NATS message size: 8MB (configurable)
 - One worker per group recommended
 - PostgreSQL logical replication prerequisites required
+- Tables must have one of the following for replication:
+  - Primary key
+  - Unique constraint with `NOT NULL` columns
+  - `REPLICA IDENTITY FULL` set
+
+Example table configurations:
+
+```sql
+-- Using primary key (recommended)
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  email TEXT,
+  name TEXT
+);
+
+-- Using unique constraint
+CREATE TABLE orders (
+  order_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  data JSONB,
+  CONSTRAINT orders_unique UNIQUE (order_id, customer_id)
+);
+ALTER TABLE orders REPLICA IDENTITY USING INDEX orders_unique;
+
+-- Using all columns (higher overhead in terms of performance)
+CREATE TABLE audit_logs (
+  id SERIAL,
+  action TEXT,
+  data JSONB
+);
+ALTER TABLE audit_logs REPLICA IDENTITY FULL;
+```
 
 ## Development
 

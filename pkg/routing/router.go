@@ -48,7 +48,7 @@ func (r *Router) ApplyRouting(message *utils.CDCMessage) (*utils.CDCMessage, err
 		return message, nil
 	}
 
-	if !ContainsOperation(route.Operations, utils.OperationType(message.Type)) {
+	if !ContainsOperation(route.Operations, message.Type) {
 		return nil, nil
 	}
 
@@ -66,13 +66,18 @@ func (r *Router) ApplyRouting(message *utils.CDCMessage) (*utils.CDCMessage, err
 			newColumns[i] = &newCol
 		}
 		routedMessage.Columns = newColumns
-	}
 
-	routedMessage.MappedPrimaryKeyColumn = message.PrimaryKeyColumn
-	for _, mapping := range route.ColumnMappings {
-		if mapping.Source == message.PrimaryKeyColumn {
-			routedMessage.MappedPrimaryKeyColumn = mapping.Destination
-			break
+		if routedMessage.ReplicationKey.Type != utils.ReplicationKeyFull {
+			mappedColumns := make([]string, len(routedMessage.ReplicationKey.Columns))
+			for i, keyCol := range routedMessage.ReplicationKey.Columns {
+				mappedName := GetMappedColumnName(route.ColumnMappings, keyCol)
+				if mappedName != "" {
+					mappedColumns[i] = mappedName
+				} else {
+					mappedColumns[i] = keyCol
+				}
+			}
+			routedMessage.ReplicationKey.Columns = mappedColumns
 		}
 	}
 

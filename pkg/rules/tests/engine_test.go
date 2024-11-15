@@ -29,7 +29,7 @@ func TestRuleEngine_AddRule(t *testing.T) {
 	re.AddRule("users", rule)
 
 	message := &utils.CDCMessage{
-		Type:   "INSERT",
+		Type:   utils.OperationInsert,
 		Schema: "public",
 		Table:  "users",
 		Columns: []*pglogrepl.RelationMessageColumn{
@@ -60,7 +60,7 @@ func TestRuleEngine_ApplyRules(t *testing.T) {
 	re.AddRule("users", rule)
 
 	message := &utils.CDCMessage{
-		Type:   "INSERT",
+		Type:   utils.OperationInsert,
 		Schema: "public",
 		Table:  "users",
 		Columns: []*pglogrepl.RelationMessageColumn{
@@ -76,7 +76,7 @@ func TestRuleEngine_ApplyRules(t *testing.T) {
 	result, err := re.ApplyRules(message)
 
 	assert.NoError(t, err)
-	value, err := result.GetColumnValue("test_column")
+	value, err := result.GetColumnValue("test_column", false)
 	assert.NoError(t, err)
 	assert.Equal(t, "transformed", value)
 }
@@ -84,7 +84,7 @@ func TestRuleEngine_ApplyRules(t *testing.T) {
 func TestRuleEngine_ApplyRules_NoRules(t *testing.T) {
 	re := rules.NewRuleEngine()
 	message := &utils.CDCMessage{
-		Type:   "INSERT",
+		Type:   utils.OperationInsert,
 		Schema: "public",
 		Table:  "users",
 		Columns: []*pglogrepl.RelationMessageColumn{
@@ -103,7 +103,7 @@ func TestRuleEngine_ApplyRules_NoRules(t *testing.T) {
 	assert.Equal(t, message, result)
 }
 
-func TestRuleEngine_LoadRules(t *testing.T) {
+func TestRuleEngine_LoadRules_Transform(t *testing.T) {
 	re := rules.NewRuleEngine()
 	config := rules.Config{
 		Tables: map[string][]rules.RuleConfig{
@@ -117,12 +117,46 @@ func TestRuleEngine_LoadRules(t *testing.T) {
 					},
 					Operations: []utils.OperationType{utils.OperationInsert, utils.OperationUpdate},
 				},
+			},
+		},
+	}
+
+	err := re.LoadRules(config)
+	assert.NoError(t, err)
+
+	message := &utils.CDCMessage{
+		Type:   utils.OperationInsert,
+		Schema: "public",
+		Table:  "users",
+		Columns: []*pglogrepl.RelationMessageColumn{
+			{Name: "test_column", DataType: pgtype.TextOID},
+		},
+		NewTuple: &pglogrepl.TupleData{
+			Columns: []*pglogrepl.TupleDataColumn{
+				{Data: []byte("test")},
+			},
+		},
+	}
+
+	result, err := re.ApplyRules(message)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	value, err := result.GetColumnValue("test_column", false)
+	assert.NoError(t, err)
+	assert.Equal(t, "t**t", value)
+}
+
+func TestRuleEngine_LoadRules_Filter(t *testing.T) {
+	re := rules.NewRuleEngine()
+	config := rules.Config{
+		Tables: map[string][]rules.RuleConfig{
+			"users": {
 				{
 					Type:   "filter",
 					Column: "id",
 					Parameters: map[string]interface{}{
 						"operator": "gt",
-						"value":    int64(100), // Change this to int64
+						"value":    int64(100),
 					},
 					Operations: []utils.OperationType{utils.OperationDelete},
 				},
@@ -134,57 +168,74 @@ func TestRuleEngine_LoadRules(t *testing.T) {
 	assert.NoError(t, err)
 
 	message := &utils.CDCMessage{
-		Type:   "INSERT",
+		Type:   utils.OperationDelete,
 		Schema: "public",
 		Table:  "users",
 		Columns: []*pglogrepl.RelationMessageColumn{
-			{Name: "test_column", DataType: pgtype.TextOID},
 			{Name: "id", DataType: pgtype.Int8OID},
 		},
-		NewTuple: &pglogrepl.TupleData{
+		OldTuple: &pglogrepl.TupleData{
 			Columns: []*pglogrepl.TupleDataColumn{
-				{Data: []byte("test")},
 				{Data: []byte("101")},
 			},
 		},
-		OldTuple: nil,
 	}
 
 	result, err := re.ApplyRules(message)
-
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	value, err := result.GetColumnValue("test_column")
+	value, err := result.GetColumnValue("id", true)
 	assert.NoError(t, err)
-	assert.Equal(t, "t**t", value)
-	idValue, err := result.GetColumnValue("id")
-	assert.NoError(t, err)
-	assert.Equal(t, int64(101), idValue)
+	assert.Equal(t, int64(101), value)
 
-	message.Type = "DELETE"
-	message.OldTuple = &pglogrepl.TupleData{
-		Columns: []*pglogrepl.TupleDataColumn{
-			{Data: []byte("test")},
-			{Data: []byte("101")},
-		},
-	}
-	message.NewTuple = nil
+	message.OldTuple.Columns[0].Data = []byte("99")
 	result, err = re.ApplyRules(message)
-
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	value, err = result.GetColumnValue("test_column")
-	assert.NoError(t, err)
-	assert.Equal(t, "t**t", value)
-	idValue, err = result.GetColumnValue("id")
-	assert.NoError(t, err)
-	assert.Equal(t, int64(101), idValue)
-
-	message.OldTuple.Columns[1].Data = []byte("99")
-	result, err = re.ApplyRules(message)
-
 	assert.NoError(t, err)
 	assert.Nil(t, result)
+}
+
+func TestRuleEngine_LoadRules_EmptyDeletes(t *testing.T) {
+	re := rules.NewRuleEngine()
+	config := rules.Config{
+		Tables: map[string][]rules.RuleConfig{
+			"users": {
+				{
+					Type:              "filter",
+					Column:            "id",
+					AllowEmptyDeletes: true,
+					Parameters: map[string]interface{}{
+						"operator": "eq",
+						"value":    int64(101),
+					},
+					Operations: []utils.OperationType{utils.OperationDelete},
+				},
+			},
+		},
+	}
+
+	err := re.LoadRules(config)
+	assert.NoError(t, err)
+
+	message := &utils.CDCMessage{
+		Type:   utils.OperationDelete,
+		Schema: "public",
+		Table:  "users",
+		Columns: []*pglogrepl.RelationMessageColumn{
+			{Name: "id", DataType: pgtype.Int8OID},
+		},
+		OldTuple: &pglogrepl.TupleData{
+			Columns: []*pglogrepl.TupleDataColumn{
+				{Data: []byte("101")},
+			},
+		},
+	}
+
+	result, err := re.ApplyRules(message)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	value, err := result.GetColumnValue("id", true)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(101), value)
 }
 
 func TestRuleEngine_ApplyRules_FilterRule(t *testing.T) {
@@ -209,7 +260,7 @@ func TestRuleEngine_ApplyRules_FilterRule(t *testing.T) {
 	assert.NoError(t, err)
 
 	message := &utils.CDCMessage{
-		Type:   "UPDATE",
+		Type:   utils.OperationUpdate,
 		Schema: "public",
 		Table:  "users",
 		Columns: []*pglogrepl.RelationMessageColumn{
@@ -225,7 +276,7 @@ func TestRuleEngine_ApplyRules_FilterRule(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	idValue, err := result.GetColumnValue("id")
+	idValue, err := result.GetColumnValue("id", false)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(101), idValue)
 
@@ -235,13 +286,13 @@ func TestRuleEngine_ApplyRules_FilterRule(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, result)
 
-	message.Type = "INSERT"
+	message.Type = utils.OperationInsert
 	message.NewTuple.Columns[0].Data = []byte("101")
 	result, err = re.ApplyRules(message)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	idValue, err = result.GetColumnValue("id")
+	idValue, err = result.GetColumnValue("id", false)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(101), idValue)
 }

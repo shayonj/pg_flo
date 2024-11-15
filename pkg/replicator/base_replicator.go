@@ -30,14 +30,15 @@ func GeneratePublicationName(group string) string {
 
 // BaseReplicator provides core functionality for PostgreSQL logical replication
 type BaseReplicator struct {
-	Config          Config
-	ReplicationConn ReplicationConnection
-	StandardConn    StandardConnection
-	Relations       map[uint32]*pglogrepl.RelationMessage
-	Logger          zerolog.Logger
-	TableDetails    map[string][]string
-	LastLSN         pglogrepl.LSN
-	NATSClient      NATSClient
+	Config               Config
+	ReplicationConn      ReplicationConnection
+	StandardConn         StandardConnection
+	Relations            map[uint32]*pglogrepl.RelationMessage
+	Logger               zerolog.Logger
+	TableDetails         map[string][]string
+	LastLSN              pglogrepl.LSN
+	NATSClient           NATSClient
+	TableReplicationKeys map[string]utils.ReplicationKey
 }
 
 // NewBaseReplicator creates a new BaseReplicator instance
@@ -316,7 +317,7 @@ func (r *BaseReplicator) HandleInsertMessage(msg *pglogrepl.InsertMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:      "INSERT",
+		Type:      utils.OperationInsert,
 		Schema:    relation.Namespace,
 		Table:     relation.RelationName,
 		Columns:   relation.Columns,
@@ -337,22 +338,36 @@ func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:           "UPDATE",
+		Type:           utils.OperationUpdate,
 		Schema:         relation.Namespace,
 		Table:          relation.RelationName,
 		Columns:        relation.Columns,
 		NewTuple:       msg.NewTuple,
 		OldTuple:       msg.OldTuple,
 		LSN:            lsn.String(),
+		EmittedAt:      time.Now(),
 		ToastedColumns: make(map[string]bool),
 	}
 
+	// Track toasted columns
 	for i, col := range relation.Columns {
-		newVal := msg.NewTuple.Columns[i]
-		cdcMessage.ToastedColumns[col.Name] = newVal.DataType == 'u'
+		if msg.NewTuple != nil {
+			newVal := msg.NewTuple.Columns[i]
+			cdcMessage.ToastedColumns[col.Name] = newVal.DataType == 'u'
+		}
 	}
 
+	// Add replication key information
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
+
+	// Ensure we have valid column types
+	for i, col := range relation.Columns {
+		if msg.NewTuple != nil && msg.NewTuple.Columns[i].Data != nil {
+			// Ensure proper type information is preserved
+			col.DataType = uint32(msg.NewTuple.Columns[i].DataType)
+		}
+	}
+
 	return r.PublishToNATS(cdcMessage)
 }
 
@@ -364,7 +379,7 @@ func (r *BaseReplicator) HandleDeleteMessage(msg *pglogrepl.DeleteMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:      "DELETE",
+		Type:      utils.OperationDelete,
 		Schema:    relation.Namespace,
 		Table:     relation.RelationName,
 		Columns:   relation.Columns,
@@ -409,10 +424,14 @@ func (r *BaseReplicator) PublishToNATS(data utils.CDCMessage) error {
 	return nil
 }
 
-// AddPrimaryKeyInfo adds primary key information to the CDCMessage
+// AddPrimaryKeyInfo adds replication key information to the CDCMessage
 func (r *BaseReplicator) AddPrimaryKeyInfo(message *utils.CDCMessage, table string) {
-	if pkColumns, ok := r.TableDetails[table]; ok && len(pkColumns) > 0 {
-		message.PrimaryKeyColumn = pkColumns[0]
+	if key, ok := r.TableReplicationKeys[table]; ok {
+		message.ReplicationKey = key
+	} else {
+		r.Logger.Error().
+			Str("table", table).
+			Msg("No replication key information found for table. This should not happen as validation is done during initialization")
 	}
 }
 
@@ -504,37 +523,99 @@ func (r *BaseReplicator) closeConnections(ctx context.Context) error {
 
 // InitializePrimaryKeyInfo initializes primary key information for all tables
 func (r *BaseReplicator) InitializePrimaryKeyInfo() error {
-	for _, table := range r.Config.Tables {
-		column, err := r.getPrimaryKeyColumn(r.Config.Schema, table)
-		if err != nil {
-			return err
-		}
-		r.TableDetails[table] = []string{column}
-	}
-	return nil
-}
-
-// getPrimaryKeyColumn retrieves the primary key column for a given table
-func (r *BaseReplicator) getPrimaryKeyColumn(schema, table string) (string, error) {
 	query := `
-		SELECT pg_attribute.attname
-		FROM pg_index, pg_class, pg_attribute, pg_namespace
-		WHERE
-			pg_class.oid = $1::regclass AND
-			indrelid = pg_class.oid AND
-			nspname = $2 AND
-			pg_class.relnamespace = pg_namespace.oid AND
-			pg_attribute.attrelid = pg_class.oid AND
-			pg_attribute.attnum = any(pg_index.indkey) AND
-			indisprimary
-		LIMIT 1
+		WITH table_info AS (
+			SELECT
+				t.tablename,
+				c.relreplident,
+				(
+					SELECT array_agg(a.attname ORDER BY array_position(i.indkey, a.attnum))
+					FROM pg_index i
+					JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+					WHERE i.indrelid = c.oid AND i.indisprimary
+				) as pk_columns,
+				(
+					SELECT array_agg(a.attname ORDER BY array_position(i.indkey, a.attnum))
+					FROM pg_index i
+					JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+					WHERE i.indrelid = c.oid AND i.indisunique AND NOT i.indisprimary
+					LIMIT 1
+				) as unique_columns
+			FROM pg_tables t
+			JOIN pg_class c ON t.tablename = c.relname
+			JOIN pg_namespace n ON c.relnamespace = n.oid
+			WHERE t.schemaname = $1
+		)
+		SELECT
+			tablename,
+			relreplident::text,
+			COALESCE(pk_columns, ARRAY[]::text[]) as pk_columns,
+			COALESCE(unique_columns, ARRAY[]::text[]) as unique_columns
+		FROM table_info;
 	`
-	var column string
-	err := r.StandardConn.QueryRow(context.Background(), query, fmt.Sprintf("%s.%s", schema, table), schema).Scan(&column)
+
+	rows, err := r.StandardConn.Query(context.Background(), query, r.Config.Schema)
 	if err != nil {
-		return "", fmt.Errorf("failed to query primary key column: %v", err)
+		return fmt.Errorf("failed to query replication key info: %v", err)
 	}
-	return column, nil
+	defer rows.Close()
+
+	r.TableReplicationKeys = make(map[string]utils.ReplicationKey)
+
+	for rows.Next() {
+		var (
+			tableName       string
+			replicaIdentity string
+			pkColumns       []string
+			uniqueColumns   []string
+		)
+
+		if err := rows.Scan(&tableName, &replicaIdentity, &pkColumns, &uniqueColumns); err != nil {
+			return fmt.Errorf("failed to scan row: %v", err)
+		}
+
+		key := utils.ReplicationKey{}
+
+		switch {
+		case len(pkColumns) > 0:
+			key = utils.ReplicationKey{
+				Type:    utils.ReplicationKeyPK,
+				Columns: pkColumns,
+			}
+		case len(uniqueColumns) > 0:
+			key = utils.ReplicationKey{
+				Type:    utils.ReplicationKeyUnique,
+				Columns: uniqueColumns,
+			}
+		case replicaIdentity == "f":
+			key = utils.ReplicationKey{
+				Type:    utils.ReplicationKeyFull,
+				Columns: nil,
+			}
+		}
+
+		if err := r.validateTableReplicationKey(tableName, key); err != nil {
+			r.Logger.Warn().
+				Str("table", tableName).
+				Str("replica_identity", replicaIdentity).
+				Str("key_type", string(key.Type)).
+				Strs("columns", key.Columns).
+				Err(err).
+				Msg("Invalid replication key configuration")
+			continue
+		}
+
+		r.TableReplicationKeys[tableName] = key
+
+		r.Logger.Debug().
+			Str("table", tableName).
+			Str("key_type", string(key.Type)).
+			Strs("columns", key.Columns).
+			Str("replica_identity", replicaIdentity).
+			Msg("Initialized replication key configuration")
+	}
+
+	return rows.Err()
 }
 
 // SaveState saves the current replication state
@@ -602,4 +683,16 @@ func (r *BaseReplicator) GetConfiguredTables(ctx context.Context) ([]string, err
 	}
 
 	return tables, nil
+}
+
+func (r *BaseReplicator) validateTableReplicationKey(tableName string, key utils.ReplicationKey) error {
+	if !key.IsValid() {
+		return fmt.Errorf(
+			"table %q requires one of the following:\n"+
+				"\t1. A PRIMARY KEY constraint\n"+
+				"\t2. A UNIQUE constraint\n"+
+				"\t3. REPLICA IDENTITY FULL (ALTER TABLE %s REPLICA IDENTITY FULL)",
+			tableName, tableName)
+	}
+	return nil
 }

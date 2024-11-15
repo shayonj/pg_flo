@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgtype"
@@ -139,4 +140,22 @@ func ToBool(v interface{}) (bool, bool) {
 		return reflect.ValueOf(v).Float() != 0, true
 	}
 	return false, false
+}
+
+// IsValid checks if the replication key is properly configured
+func (rk *ReplicationKey) IsValid() bool {
+	if rk.Type == ReplicationKeyFull {
+		return true // FULL doesn't require specific columns
+	}
+
+	return len(rk.Columns) > 0 &&
+		(rk.Type == ReplicationKeyPK || rk.Type == ReplicationKeyUnique)
+}
+
+// String returns a string representation of the replication key
+func (rk ReplicationKey) String() string {
+	if rk.Type == ReplicationKeyFull {
+		return "FULL"
+	}
+	return fmt.Sprintf("%s (%s)", strings.Join(rk.Columns, ", "), rk.Type)
 }

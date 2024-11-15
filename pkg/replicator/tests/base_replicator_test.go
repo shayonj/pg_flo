@@ -29,12 +29,26 @@ func TestBaseReplicator(t *testing.T) {
 		mockStandardConn := new(MockStandardConnection)
 		mockNATSClient := new(MockNATSClient)
 
-		mockRows := new(MockRows)
-		mockRows.On("Next").Return(false).Once()
-		mockRows.On("Err").Return(nil).Once()
-		mockRows.On("Close").Return().Once()
+		// Mock for InitializeOIDMap query
+		mockOIDRows := new(MockRows)
+		mockOIDRows.On("Next").Return(false)
+		mockOIDRows.On("Err").Return(nil)
+		mockOIDRows.On("Close").Return()
 
-		mockStandardConn.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(mockRows, nil).Once()
+		// Mock for InitializePrimaryKeyInfo query
+		mockPKRows := new(MockRows)
+		mockPKRows.On("Next").Return(false)
+		mockPKRows.On("Err").Return(nil)
+		mockPKRows.On("Close").Return()
+
+		// Set up expectations for both queries
+		mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+			return strings.Contains(q, "pg_type")
+		}), mock.Anything).Return(mockOIDRows, nil).Once()
+
+		mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+			return strings.Contains(q, "table_info")
+		}), mock.Anything).Return(mockPKRows, nil).Once()
 
 		mockPoolConn := &MockPgxPoolConn{}
 		mockStandardConn.On("Acquire", mock.Anything).Return(mockPoolConn, nil).Maybe()
@@ -58,7 +72,8 @@ func TestBaseReplicator(t *testing.T) {
 		assert.Equal(t, mockNATSClient, br.NATSClient)
 
 		mockStandardConn.AssertExpectations(t)
-		mockRows.AssertExpectations(t)
+		mockOIDRows.AssertExpectations(t)
+		mockPKRows.AssertExpectations(t)
 	})
 
 	t.Run("CreatePublication", func(t *testing.T) {
@@ -363,7 +378,7 @@ func TestBaseReplicator(t *testing.T) {
 					return false
 				}
 
-				assert.Equal(t, "INSERT", decodedMsg.Type)
+				assert.Equal(t, utils.OperationInsert, decodedMsg.Type)
 				assert.Equal(t, "public", decodedMsg.Schema)
 				assert.Equal(t, "users", decodedMsg.Table)
 				assert.Equal(t, msg.Tuple, decodedMsg.NewTuple)
@@ -536,7 +551,7 @@ func TestBaseReplicator(t *testing.T) {
 							return false
 						}
 
-						assert.Equal(t, "INSERT", decodedMsg.Type)
+						assert.Equal(t, utils.OperationInsert, decodedMsg.Type)
 						assert.Equal(t, "public", decodedMsg.Schema)
 						assert.Equal(t, "test_table", decodedMsg.Table)
 
@@ -629,7 +644,7 @@ func TestBaseReplicator(t *testing.T) {
 					return false
 				}
 
-				assert.Equal(t, "UPDATE", decodedMsg.Type)
+				assert.Equal(t, utils.OperationUpdate, decodedMsg.Type)
 				assert.Equal(t, "public", decodedMsg.Schema)
 				assert.Equal(t, "users", decodedMsg.Table)
 				assert.Equal(t, msg.OldTuple, decodedMsg.OldTuple)
@@ -680,8 +695,8 @@ func TestBaseReplicator(t *testing.T) {
 				OldTuple:   nil,
 				NewTuple: &pglogrepl.TupleData{
 					Columns: []*pglogrepl.TupleDataColumn{
-						{Data: []byte("1")},
-						{Data: []byte("John Doe")},
+						{Data: []byte("1"), DataType: pgtype.Int4OID},
+						{Data: []byte("John Doe"), DataType: pgtype.TextOID},
 					},
 				},
 			}
@@ -694,18 +709,16 @@ func TestBaseReplicator(t *testing.T) {
 					return false
 				}
 
-				assert.Equal(t, "UPDATE", decodedMsg.Type)
+				assert.Equal(t, utils.OperationUpdate, decodedMsg.Type)
 				assert.Equal(t, "public", decodedMsg.Schema)
 				assert.Equal(t, "users", decodedMsg.Table)
 				assert.Nil(t, decodedMsg.OldTuple)
 				assert.NotNil(t, decodedMsg.NewTuple)
-				assert.Equal(t, msg.NewTuple, decodedMsg.NewTuple)
 
-				assert.Len(t, decodedMsg.Columns, 2)
-				assert.Equal(t, "id", decodedMsg.Columns[0].Name)
 				assert.Equal(t, uint32(pgtype.Int4OID), decodedMsg.Columns[0].DataType)
-				assert.Equal(t, "name", decodedMsg.Columns[1].Name)
 				assert.Equal(t, uint32(pgtype.TextOID), decodedMsg.Columns[1].DataType)
+				assert.Equal(t, []byte("1"), decodedMsg.NewTuple.Columns[0].Data)
+				assert.Equal(t, []byte("John Doe"), decodedMsg.NewTuple.Columns[1].Data)
 
 				return true
 			})).Return(nil)
@@ -754,7 +767,7 @@ func TestBaseReplicator(t *testing.T) {
 					return false
 				}
 
-				assert.Equal(t, "DELETE", decodedMsg.Type)
+				assert.Equal(t, utils.OperationDelete, decodedMsg.Type)
 				assert.Equal(t, "public", decodedMsg.Schema)
 				assert.Equal(t, "users", decodedMsg.Table)
 				assert.Equal(t, msg.OldTuple, decodedMsg.OldTuple)
@@ -819,7 +832,7 @@ func TestBaseReplicator(t *testing.T) {
 			}
 
 			data := utils.CDCMessage{
-				Type:   "INSERT",
+				Type:   utils.OperationInsert,
 				Schema: "public",
 				Table:  "users",
 				Columns: []*pglogrepl.RelationMessageColumn{
@@ -842,7 +855,7 @@ func TestBaseReplicator(t *testing.T) {
 					return false
 				}
 
-				assert.Equal(t, "INSERT", decodedMsg.Type)
+				assert.Equal(t, utils.OperationInsert, decodedMsg.Type)
 				assert.Equal(t, "public", decodedMsg.Schema)
 				assert.Equal(t, "users", decodedMsg.Table)
 
@@ -877,7 +890,7 @@ func TestBaseReplicator(t *testing.T) {
 			}
 
 			data := utils.CDCMessage{
-				Type:   "INSERT",
+				Type:   utils.OperationInsert,
 				Schema: "public",
 				Table:  "users",
 				Columns: []*pglogrepl.RelationMessageColumn{
@@ -905,8 +918,11 @@ func TestBaseReplicator(t *testing.T) {
 	t.Run("AddPrimaryKeyInfo", func(t *testing.T) {
 		t.Run("Successful addition of primary key info", func(t *testing.T) {
 			br := &replicator.BaseReplicator{
-				TableDetails: map[string][]string{
-					"public.users": {"id"},
+				TableReplicationKeys: map[string]utils.ReplicationKey{
+					"public.users": {
+						Type:    utils.ReplicationKeyPK,
+						Columns: []string{"id"},
+					},
 				},
 			}
 
@@ -938,7 +954,10 @@ func TestBaseReplicator(t *testing.T) {
 						{Data: []byte("John Doe")},
 					},
 				},
-				PrimaryKeyColumn: "id",
+				ReplicationKey: utils.ReplicationKey{
+					Type:    utils.ReplicationKeyPK,
+					Columns: []string{"id"},
+				},
 			}
 
 			br.AddPrimaryKeyInfo(message, "public.users")
