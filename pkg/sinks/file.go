@@ -84,9 +84,9 @@ func (s *FileSink) WriteBatch(messages []*utils.CDCMessage) error {
 	defer s.mutex.Unlock()
 
 	for _, message := range messages {
-		decodedMessage, err := message.GetDecodedMessage()
+		decodedMessage, err := buildDecodedMessage(message)
 		if err != nil {
-			return fmt.Errorf("failed to get decoded message: %v", err)
+			return fmt.Errorf("failed to build decoded message: %v", err)
 		}
 
 		jsonData, err := json.Marshal(decodedMessage)
@@ -100,7 +100,7 @@ func (s *FileSink) WriteBatch(messages []*utils.CDCMessage) error {
 			}
 		}
 
-		jsonData = append(jsonData, '\n') // Add newline for JSONL format
+		jsonData = append(jsonData, '\n')
 		n, err := s.currentFile.Write(jsonData)
 		if err != nil {
 			return fmt.Errorf("failed to write to log file: %v", err)
@@ -108,7 +108,6 @@ func (s *FileSink) WriteBatch(messages []*utils.CDCMessage) error {
 
 		s.currentSize += int64(n)
 	}
-
 	return nil
 }
 

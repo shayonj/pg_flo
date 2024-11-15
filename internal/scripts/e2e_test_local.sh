@@ -33,9 +33,9 @@ make build
 
 setup_docker
 
-log "Running e2e postgres uniquness tests..."
-if CI=false ruby ./internal/scripts/e2e_postgres_uniquness.rb; then
-  success "e2e ddl tests completed successfully"
+log "Running e2e transform filter tests..."
+if CI=false ./internal/scripts/e2e_transform_filter.sh; then
+  success "e2e transform filter tests completed successfully"
 else
   error "Original e2e tests failed"
   exit 1

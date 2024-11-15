@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgtype"
@@ -150,12 +149,4 @@ func (rk *ReplicationKey) IsValid() bool {
 
 	return len(rk.Columns) > 0 &&
 		(rk.Type == ReplicationKeyPK || rk.Type == ReplicationKeyUnique)
-}
-
-// String returns a string representation of the replication key
-func (rk ReplicationKey) String() string {
-	if rk.Type == ReplicationKeyFull {
-		return "FULL"
-	}
-	return fmt.Sprintf("%s (%s)", strings.Join(rk.Columns, ", "), rk.Type)
 }

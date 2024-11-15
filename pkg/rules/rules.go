@@ -109,7 +109,8 @@ func NewMaskTransformRule(table, column string, params map[string]interface{}) (
 	}
 
 	transform := func(m *utils.CDCMessage) (*utils.CDCMessage, error) {
-		value, err := m.GetColumnValue(column, false)
+		useOldValues := m.Type == utils.OperationDelete
+		value, err := m.GetColumnValue(column, useOldValues)
 		if err != nil {
 			return m, nil
 		}
