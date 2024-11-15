@@ -33,9 +33,9 @@ make build
 
 setup_docker
 
-log "Running e2e ddl tests..."
-if CI=false ./internal/scripts/e2e_ddl.sh; then
-  success "e2e ddl tests completed successfully"
+log "Running copy and stream tests..."
+if CI=false ./internal/scripts/e2e_copy_and_stream.sh; then
+  success "e2e copy and stream tests completed successfully"
 else
   error "Original e2e tests failed"
   exit 1

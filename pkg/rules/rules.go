@@ -78,7 +78,7 @@ func NewRegexTransformRule(table, column string, params map[string]interface{}) 
 	}
 
 	transform := func(m *utils.CDCMessage) (*utils.CDCMessage, error) {
-		value, err := m.GetColumnValue(column)
+		value, err := m.GetDecodedColumnValue(column)
 		if err != nil {
 			return m, nil
 		}
@@ -109,7 +109,7 @@ func NewMaskTransformRule(table, column string, params map[string]interface{}) (
 	}
 
 	transform := func(m *utils.CDCMessage) (*utils.CDCMessage, error) {
-		value, err := m.GetColumnValue(column)
+		value, err := m.GetDecodedColumnValue(column)
 		if err != nil {
 			return m, nil
 		}
@@ -179,7 +179,7 @@ func NewFilterRule(table, column string, params map[string]interface{}) (Rule, e
 // NewComparisonCondition creates a new comparison condition function
 func NewComparisonCondition(column, operator string, value interface{}) func(*utils.CDCMessage) bool {
 	return func(m *utils.CDCMessage) bool {
-		columnValue, err := m.GetColumnValue(column)
+		columnValue, err := m.GetDecodedColumnValue(column)
 		if err != nil {
 			return false
 		}
@@ -261,7 +261,7 @@ func NewComparisonCondition(column, operator string, value interface{}) func(*ut
 // NewContainsCondition creates a new contains condition function
 func NewContainsCondition(column string, value interface{}) func(*utils.CDCMessage) bool {
 	return func(m *utils.CDCMessage) bool {
-		columnValue, err := m.GetColumnValue(column)
+		columnValue, err := m.GetDecodedColumnValue(column)
 		if err != nil {
 			return false
 		}

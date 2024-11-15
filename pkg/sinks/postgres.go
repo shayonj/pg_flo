@@ -118,24 +118,31 @@ func (s *PostgresSink) handleInsert(tx pgx.Tx, message *utils.CDCMessage) error 
 	columns := make([]string, 0, len(message.Columns))
 	placeholders := make([]string, 0, len(message.Columns))
 	values := make([]interface{}, 0, len(message.Columns))
+	paramCount := 1
 
-	for i, col := range message.Columns {
-		columns = append(columns, col.Name)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
-		value, err := message.GetDecodedColumnValue(col.Name)
-		if err != nil {
-			return fmt.Errorf("failed to get column value: %v", err)
+	for _, col := range message.Columns {
+		if val, ok := message.NewValues[col.Name]; ok {
+			columns = append(columns, col.Name)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", paramCount))
+			values = append(values, val.Get())
+			paramCount++
 		}
-		values = append(values, value)
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING",
+	if len(columns) == 0 {
+		return fmt.Errorf("no columns to insert")
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s)",
 		message.Schema,
 		message.Table,
 		strings.Join(columns, ","),
 		strings.Join(placeholders, ","),
-		message.PrimaryKeyColumn,
 	)
+
+	if message.PrimaryKeyColumn != "" {
+		query += fmt.Sprintf(" ON CONFLICT (%s) DO NOTHING", message.PrimaryKeyColumn)
+	}
 
 	_, err := tx.Exec(context.Background(), query, values...)
 	return err
@@ -143,52 +150,72 @@ func (s *PostgresSink) handleInsert(tx pgx.Tx, message *utils.CDCMessage) error 
 
 // handleUpdate processes an update operation
 func (s *PostgresSink) handleUpdate(tx pgx.Tx, message *utils.CDCMessage) error {
-	setClauses := make([]string, 0, len(message.Columns))
-	values := make([]interface{}, 0, len(message.Columns))
-	whereConditions := make([]string, 0)
-	valueIndex := 1
+	if len(message.NewValues) == 0 {
+		return fmt.Errorf("no values to update")
+	}
 
-	for _, col := range message.Columns {
-		if message.IsColumnToasted(col.Name) {
-			// Skip TOAST columns that haven't changed
-			continue
+	setColumns := make([]string, 0, len(message.NewValues))
+	values := make([]interface{}, 0, len(message.NewValues))
+	paramCount := 1
+
+	for colName, val := range message.NewValues {
+		if message.GetColumnIndex(colName) == -1 {
+			return fmt.Errorf("column %s not found in message columns", colName)
 		}
-
-		newValue, err := message.GetColumnValue(col.Name)
-		if err != nil {
-			return fmt.Errorf("failed to get column value: %v", err)
-		}
-
-		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col.Name, valueIndex))
-		values = append(values, newValue)
-		valueIndex++
-
-		if col.Name == message.PrimaryKeyColumn {
-			whereConditions = append(whereConditions, fmt.Sprintf("%s = $%d", col.Name, valueIndex))
-			values = append(values, newValue) // Use the same value for the WHERE clause
-			valueIndex++
+		if !val.IsNull() {
+			setColumns = append(setColumns, fmt.Sprintf("%s = $%d", colName, paramCount))
+			values = append(values, val.Get())
+			paramCount++
 		}
 	}
 
-	if len(setClauses) == 0 {
-		// If there are no columns to update (all were TOAST and unchanged), we can skip this update
-		return nil
-	}
+	whereClause, whereValues := s.buildWhereClause(message, paramCount)
+	values = append(values, whereValues...)
 
-	query := fmt.Sprintf(
-		"UPDATE %s.%s SET %s WHERE %s",
+	query := fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s",
 		message.Schema,
 		message.Table,
-		strings.Join(setClauses, ", "),
-		strings.Join(whereConditions, " AND "),
+		strings.Join(setColumns, ", "),
+		whereClause,
 	)
 
 	_, err := tx.Exec(context.Background(), query, values...)
-	if err != nil {
-		return fmt.Errorf("failed to execute update query: %v", err)
+	return err
+}
+
+// buildWhereClause builds the WHERE clause for the update operation
+func (s *PostgresSink) buildWhereClause(message *utils.CDCMessage, startParam int) (string, []interface{}) {
+	var conditions []string
+	var values []interface{}
+	paramCount := startParam
+
+	if message.PrimaryKeyColumn != "" {
+		if message.GetColumnIndex(message.PrimaryKeyColumn) == -1 {
+			return "false", nil // Invalid primary key column
+		}
+		if oldVal, ok := message.OldValues[message.PrimaryKeyColumn]; ok {
+			conditions = append(conditions, fmt.Sprintf("%s = $%d", message.PrimaryKeyColumn, paramCount))
+			values = append(values, oldVal.Get())
+			paramCount++
+		}
+	} else {
+		for colName, val := range message.OldValues {
+			if message.GetColumnIndex(colName) == -1 {
+				continue // Skip invalid columns
+			}
+			if !val.IsNull() {
+				conditions = append(conditions, fmt.Sprintf("%s = $%d", colName, paramCount))
+				values = append(values, val.Get())
+				paramCount++
+			}
+		}
 	}
 
-	return nil
+	if len(conditions) == 0 {
+		return "true", nil
+	}
+
+	return strings.Join(conditions, " AND "), values
 }
 
 // handleDelete processes a delete operation
@@ -197,9 +224,14 @@ func (s *PostgresSink) handleDelete(tx pgx.Tx, message *utils.CDCMessage) error 
 		return fmt.Errorf("primary key column not specified in the message")
 	}
 
-	pkValue, err := message.GetColumnValue(message.PrimaryKeyColumn)
+	pkValue, err := message.GetDecodedColumnValue(message.PrimaryKeyColumn)
 	if err != nil {
 		return fmt.Errorf("failed to get primary key value: %v", err)
+	}
+
+	colIndex := message.GetColumnIndex(message.PrimaryKeyColumn)
+	if colIndex == -1 {
+		return fmt.Errorf("primary key column %s not found in columns", message.PrimaryKeyColumn)
 	}
 
 	query := fmt.Sprintf("DELETE FROM %s.%s WHERE %s = $1",
@@ -222,14 +254,14 @@ func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) (pgx.Tx, 
 		tx = newTx
 	}
 
-	ddlCommand, err := message.GetColumnValue("ddl_command")
+	ddlCommand, err := message.GetDecodedColumnValue("ddl_command")
 	if err != nil {
 		return tx, fmt.Errorf("failed to get DDL command: %v", err)
 	}
 
 	ddlString, ok := ddlCommand.(string)
 	if !ok {
-		return tx, fmt.Errorf("DDL command is not a string")
+		return tx, fmt.Errorf("DDL command is not a string, got %T", ddlCommand)
 	}
 
 	log.Debug().Msgf("Executing DDL: %s", ddlString)
@@ -339,13 +371,13 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 			}
 
 			switch message.Type {
-			case "INSERT":
+			case utils.OperationInsert:
 				operationErr = s.handleInsert(tx, message)
-			case "UPDATE":
+			case utils.OperationUpdate:
 				operationErr = s.handleUpdate(tx, message)
-			case "DELETE":
+			case utils.OperationDelete:
 				operationErr = s.handleDelete(tx, message)
-			case "DDL":
+			case utils.OperationDDL:
 				var newTx pgx.Tx
 				newTx, operationErr = s.handleDDL(tx, message)
 				tx = newTx

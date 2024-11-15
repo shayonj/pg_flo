@@ -316,13 +316,23 @@ func (r *BaseReplicator) HandleInsertMessage(msg *pglogrepl.InsertMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:      "INSERT",
+		Type:      utils.OperationInsert,
 		Schema:    relation.Namespace,
 		Table:     relation.RelationName,
 		Columns:   relation.Columns,
+		NewValues: make(map[string]*utils.PostgresValue),
 		EmittedAt: time.Now(),
-		NewTuple:  msg.Tuple,
 		LSN:       lsn.String(),
+	}
+
+	// Convert tuple data to PostgresValue
+	for i, col := range relation.Columns {
+		val := msg.Tuple.Columns[i]
+		pgValue, err := utils.NewPostgresValue(col.DataType, val.Data)
+		if err != nil {
+			return fmt.Errorf("failed to convert column %s: %w", col.Name, err)
+		}
+		cdcMessage.NewValues[col.Name] = pgValue
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -337,19 +347,38 @@ func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:           "UPDATE",
+		Type:           utils.OperationUpdate,
 		Schema:         relation.Namespace,
 		Table:          relation.RelationName,
 		Columns:        relation.Columns,
-		NewTuple:       msg.NewTuple,
-		OldTuple:       msg.OldTuple,
+		NewValues:      make(map[string]*utils.PostgresValue),
+		OldValues:      make(map[string]*utils.PostgresValue),
 		LSN:            lsn.String(),
+		EmittedAt:      time.Now(),
 		ToastedColumns: make(map[string]bool),
 	}
 
+	// Convert new tuple data
 	for i, col := range relation.Columns {
 		newVal := msg.NewTuple.Columns[i]
 		cdcMessage.ToastedColumns[col.Name] = newVal.DataType == 'u'
+
+		if !cdcMessage.ToastedColumns[col.Name] {
+			pgValue, err := utils.NewPostgresValue(col.DataType, newVal.Data)
+			if err != nil {
+				return fmt.Errorf("failed to convert new value for column %s: %w", col.Name, err)
+			}
+			cdcMessage.NewValues[col.Name] = pgValue
+		}
+
+		if msg.OldTuple != nil {
+			oldVal := msg.OldTuple.Columns[i]
+			pgValue, err := utils.NewPostgresValue(col.DataType, oldVal.Data)
+			if err != nil {
+				return fmt.Errorf("failed to convert old value for column %s: %w", col.Name, err)
+			}
+			cdcMessage.OldValues[col.Name] = pgValue
+		}
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -364,13 +393,23 @@ func (r *BaseReplicator) HandleDeleteMessage(msg *pglogrepl.DeleteMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:      "DELETE",
+		Type:      utils.OperationDelete,
 		Schema:    relation.Namespace,
 		Table:     relation.RelationName,
 		Columns:   relation.Columns,
-		OldTuple:  msg.OldTuple,
+		OldValues: make(map[string]*utils.PostgresValue),
 		EmittedAt: time.Now(),
 		LSN:       lsn.String(),
+	}
+
+	// Convert old tuple data
+	for i, col := range relation.Columns {
+		oldVal := msg.OldTuple.Columns[i]
+		pgValue, err := utils.NewPostgresValue(col.DataType, oldVal.Data)
+		if err != nil {
+			return fmt.Errorf("failed to convert column %s: %w", col.Name, err)
+		}
+		cdcMessage.OldValues[col.Name] = pgValue
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
@@ -391,18 +430,25 @@ func (r *BaseReplicator) HandleCommitMessage(msg *pglogrepl.CommitMessage) error
 
 // PublishToNATS publishes a message to NATS
 func (r *BaseReplicator) PublishToNATS(data utils.CDCMessage) error {
-	binaryData, err := data.MarshalBinary()
+	// Validate operation type
+	if _, err := utils.ValidateOperationType(data.Type); err != nil {
+		return fmt.Errorf("invalid operation type: %w", err)
+	}
+
+	bytes, err := data.MarshalBinary()
 	if err != nil {
-		return fmt.Errorf("failed to marshal data: %w", err)
+		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
 	subject := fmt.Sprintf("pgflo.%s", r.Config.Group)
-	err = r.NATSClient.PublishMessage(subject, binaryData)
+	err = r.NATSClient.PublishMessage(subject, bytes)
 	if err != nil {
 		r.Logger.Error().
 			Err(err).
 			Str("subject", subject).
 			Str("group", r.Config.Group).
+			Str("operation", string(data.Type)).
+			Str("table", data.Table).
 			Msg("Failed to publish message to NATS")
 		return err
 	}

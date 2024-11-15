@@ -166,6 +166,15 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 	var processedIDs []int
 	seenCommands := make(map[string]bool)
 
+	// Define DDL columns structure
+	ddlColumns := []*pglogrepl.RelationMessageColumn{
+		{Name: "event_type", DataType: pgtype.TextOID},
+		{Name: "object_type", DataType: pgtype.TextOID},
+		{Name: "object_identity", DataType: pgtype.TextOID},
+		{Name: "ddl_command", DataType: pgtype.TextOID},
+		{Name: "created_at", DataType: pgtype.TextOID},
+	}
+
 	for rows.Next() {
 		var id int
 		var eventType, objectType, objectIdentity, ddlCommand string
@@ -195,30 +204,34 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 		}
 
 		cdcMessage := utils.CDCMessage{
-			Type:      "DDL",
+			Type:      utils.OperationDDL,
 			Schema:    schema,
 			Table:     table,
 			EmittedAt: time.Now(),
-			Columns: []*pglogrepl.RelationMessageColumn{
-				{Name: "event_type", DataType: pgtype.TextOID},
-				{Name: "object_type", DataType: pgtype.TextOID},
-				{Name: "object_identity", DataType: pgtype.TextOID},
-				{Name: "ddl_command", DataType: pgtype.TextOID},
-				{Name: "created_at", DataType: pgtype.TimestamptzOID},
-			},
-			NewTuple: &pglogrepl.TupleData{
-				Columns: []*pglogrepl.TupleDataColumn{
-					{Data: []byte(eventType)},
-					{Data: []byte(objectType)},
-					{Data: []byte(objectIdentity)},
-					{Data: []byte(ddlCommand)},
-					{Data: []byte(createdAt.Format(time.RFC3339))},
-				},
-			},
+			Columns:   ddlColumns,
+			NewValues: make(map[string]*utils.PostgresValue),
+		}
+
+		values := map[string]interface{}{
+			"event_type":      eventType,
+			"object_type":     objectType,
+			"object_identity": objectIdentity,
+			"ddl_command":     ddlCommand,
+			"created_at":      createdAt.Format(time.RFC3339Nano),
+		}
+
+		for name, value := range values {
+			if err := cdcMessage.SetColumnValue(name, value); err != nil {
+				d.BaseRepl.Logger.Error().Err(err).
+					Str("field", name).
+					Msg("Failed to convert DDL value")
+				return err
+			}
 		}
 
 		if err := d.BaseRepl.PublishToNATS(cdcMessage); err != nil {
-			d.BaseRepl.Logger.Error().Err(err).Msg("Error during publishing DDL event to NATS")
+			d.BaseRepl.Logger.Error().Err(err).
+				Msg("Error during publishing DDL event to NATS")
 			return nil
 		}
 

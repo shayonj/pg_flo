@@ -354,28 +354,21 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 			return 0, fmt.Errorf("error reading row: %v", err)
 		}
 
-		tupleData := &pglogrepl.TupleData{
-			Columns: make([]*pglogrepl.TupleDataColumn, len(values)),
-		}
-		for i, value := range values {
-			data, err := utils.ConvertToPgCompatibleOutput(value, fieldDescriptions[i].DataTypeOID)
-			if err != nil {
-				return 0, fmt.Errorf("error converting value: %v", err)
-			}
-
-			tupleData.Columns[i] = &pglogrepl.TupleDataColumn{
-				DataType: uint8(fieldDescriptions[i].DataTypeOID),
-				Data:     data,
-			}
-		}
-
 		cdcMessage := utils.CDCMessage{
-			Type:      "INSERT",
+			Type:      utils.OperationInsert,
 			Schema:    schema,
 			Table:     tableName,
 			Columns:   columns,
-			NewTuple:  tupleData,
+			NewValues: make(map[string]*utils.PostgresValue),
 			EmittedAt: time.Now(),
+		}
+
+		for i, value := range values {
+			pgValue, err := utils.NewPostgresValue(fieldDescriptions[i].DataTypeOID, value)
+			if err != nil {
+				return 0, fmt.Errorf("error converting value: %v", err)
+			}
+			cdcMessage.NewValues[fieldDescriptions[i].Name] = pgValue
 		}
 
 		r.BaseReplicator.AddPrimaryKeyInfo(&cdcMessage, tableName)

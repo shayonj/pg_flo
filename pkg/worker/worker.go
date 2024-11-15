@@ -175,20 +175,35 @@ func (w *Worker) processMessage(msg *nats.Msg) error {
 	}
 
 	var cdcMessage utils.CDCMessage
-	err = cdcMessage.UnmarshalBinary(msg.Data)
-	if err != nil {
-		w.logger.Error().Err(err).Msg("Failed to unmarshal message")
+	if err := cdcMessage.UnmarshalBinary(msg.Data); err != nil {
+		w.logger.Error().
+			Err(err).
+			Str("data", string(msg.Data)).
+			Msg("Failed to unmarshal message")
+		return err
+	}
+
+	if _, err := utils.ValidateOperationType(cdcMessage.Type); err != nil {
+		w.logger.Error().
+			Err(err).
+			Str("type", string(cdcMessage.Type)).
+			Msg("Invalid operation type")
 		return err
 	}
 
 	if w.ruleEngine != nil {
 		processedMessage, err := w.ruleEngine.ApplyRules(&cdcMessage)
 		if err != nil {
-			w.logger.Error().Err(err).Msg("Failed to apply rules")
+			w.logger.Error().
+				Err(err).
+				Str("table", cdcMessage.Table).
+				Msg("Failed to apply rules")
 			return err
 		}
 		if processedMessage == nil {
-			w.logger.Debug().Msg("Message filtered out by rules")
+			w.logger.Debug().
+				Str("table", cdcMessage.Table).
+				Msg("Message filtered out by rules")
 			return nil
 		}
 		cdcMessage = *processedMessage
@@ -197,11 +212,16 @@ func (w *Worker) processMessage(msg *nats.Msg) error {
 	if w.router != nil {
 		routedMessage, err := w.router.ApplyRouting(&cdcMessage)
 		if err != nil {
-			w.logger.Error().Err(err).Msg("Failed to apply routing")
+			w.logger.Error().
+				Err(err).
+				Str("table", cdcMessage.Table).
+				Msg("Failed to apply routing")
 			return err
 		}
 		if routedMessage == nil {
-			w.logger.Debug().Msg("Message filtered out by routing")
+			w.logger.Debug().
+				Str("table", cdcMessage.Table).
+				Msg("Message filtered out by routing")
 			return nil
 		}
 		cdcMessage = *routedMessage
