@@ -195,7 +195,7 @@ func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 		}
 
 		cdcMessage := utils.CDCMessage{
-			Type:      "DDL",
+			Type:      utils.OperationDDL,
 			Schema:    schema,
 			Table:     table,
 			EmittedAt: time.Now(),

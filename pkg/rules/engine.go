@@ -25,7 +25,7 @@ func (re *RuleEngine) ApplyRules(message *utils.CDCMessage) (*utils.CDCMessage, 
 
 	logger.Info().
 		Str("table", message.Table).
-		Str("operation", message.Type).
+		Str("operation", string(message.Type)).
 		Int("ruleCount", len(rules)).
 		Msg("Applying rules")
 

@@ -140,3 +140,13 @@ func ToBool(v interface{}) (bool, bool) {
 	}
 	return false, false
 }
+
+// IsValid checks if the replication key is properly configured
+func (rk *ReplicationKey) IsValid() bool {
+	if rk.Type == ReplicationKeyFull {
+		return true // FULL doesn't require specific columns
+	}
+
+	return len(rk.Columns) > 0 &&
+		(rk.Type == ReplicationKeyPK || rk.Type == ReplicationKeyUnique)
+}

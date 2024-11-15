@@ -370,7 +370,7 @@ func (r *CopyAndStreamReplicator) executeCopyQuery(ctx context.Context, tx pgx.T
 		}
 
 		cdcMessage := utils.CDCMessage{
-			Type:      "INSERT",
+			Type:      utils.OperationInsert,
 			Schema:    schema,
 			Table:     tableName,
 			Columns:   columns,

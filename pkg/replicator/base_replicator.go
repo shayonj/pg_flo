@@ -30,14 +30,15 @@ func GeneratePublicationName(group string) string {
 
 // BaseReplicator provides core functionality for PostgreSQL logical replication
 type BaseReplicator struct {
-	Config          Config
-	ReplicationConn ReplicationConnection
-	StandardConn    StandardConnection
-	Relations       map[uint32]*pglogrepl.RelationMessage
-	Logger          zerolog.Logger
-	TableDetails    map[string][]string
-	LastLSN         pglogrepl.LSN
-	NATSClient      NATSClient
+	Config               Config
+	ReplicationConn      ReplicationConnection
+	StandardConn         StandardConnection
+	Relations            map[uint32]*pglogrepl.RelationMessage
+	Logger               zerolog.Logger
+	TableDetails         map[string][]string
+	LastLSN              pglogrepl.LSN
+	NATSClient           NATSClient
+	TableReplicationKeys map[string]utils.ReplicationKey
 }
 
 // NewBaseReplicator creates a new BaseReplicator instance
@@ -316,7 +317,7 @@ func (r *BaseReplicator) HandleInsertMessage(msg *pglogrepl.InsertMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:      "INSERT",
+		Type:      utils.OperationInsert,
 		Schema:    relation.Namespace,
 		Table:     relation.RelationName,
 		Columns:   relation.Columns,
@@ -337,22 +338,27 @@ func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:           "UPDATE",
+		Type:           utils.OperationUpdate,
 		Schema:         relation.Namespace,
 		Table:          relation.RelationName,
 		Columns:        relation.Columns,
 		NewTuple:       msg.NewTuple,
 		OldTuple:       msg.OldTuple,
 		LSN:            lsn.String(),
+		EmittedAt:      time.Now(),
 		ToastedColumns: make(map[string]bool),
 	}
 
+	// Track toasted columns
 	for i, col := range relation.Columns {
-		newVal := msg.NewTuple.Columns[i]
-		cdcMessage.ToastedColumns[col.Name] = newVal.DataType == 'u'
+		if msg.NewTuple != nil {
+			newVal := msg.NewTuple.Columns[i]
+			cdcMessage.ToastedColumns[col.Name] = newVal.DataType == 'u'
+		}
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
+
 	return r.PublishToNATS(cdcMessage)
 }
 
@@ -364,7 +370,7 @@ func (r *BaseReplicator) HandleDeleteMessage(msg *pglogrepl.DeleteMessage, lsn p
 	}
 
 	cdcMessage := utils.CDCMessage{
-		Type:      "DELETE",
+		Type:      utils.OperationDelete,
 		Schema:    relation.Namespace,
 		Table:     relation.RelationName,
 		Columns:   relation.Columns,
@@ -407,13 +413,6 @@ func (r *BaseReplicator) PublishToNATS(data utils.CDCMessage) error {
 		return err
 	}
 	return nil
-}
-
-// AddPrimaryKeyInfo adds primary key information to the CDCMessage
-func (r *BaseReplicator) AddPrimaryKeyInfo(message *utils.CDCMessage, table string) {
-	if pkColumns, ok := r.TableDetails[table]; ok && len(pkColumns) > 0 {
-		message.PrimaryKeyColumn = pkColumns[0]
-	}
 }
 
 // SendStandbyStatusUpdate sends a status update to the primary server
@@ -502,41 +501,6 @@ func (r *BaseReplicator) closeConnections(ctx context.Context) error {
 	return nil
 }
 
-// InitializePrimaryKeyInfo initializes primary key information for all tables
-func (r *BaseReplicator) InitializePrimaryKeyInfo() error {
-	for _, table := range r.Config.Tables {
-		column, err := r.getPrimaryKeyColumn(r.Config.Schema, table)
-		if err != nil {
-			return err
-		}
-		r.TableDetails[table] = []string{column}
-	}
-	return nil
-}
-
-// getPrimaryKeyColumn retrieves the primary key column for a given table
-func (r *BaseReplicator) getPrimaryKeyColumn(schema, table string) (string, error) {
-	query := `
-		SELECT pg_attribute.attname
-		FROM pg_index, pg_class, pg_attribute, pg_namespace
-		WHERE
-			pg_class.oid = $1::regclass AND
-			indrelid = pg_class.oid AND
-			nspname = $2 AND
-			pg_class.relnamespace = pg_namespace.oid AND
-			pg_attribute.attrelid = pg_class.oid AND
-			pg_attribute.attnum = any(pg_index.indkey) AND
-			indisprimary
-		LIMIT 1
-	`
-	var column string
-	err := r.StandardConn.QueryRow(context.Background(), query, fmt.Sprintf("%s.%s", schema, table), schema).Scan(&column)
-	if err != nil {
-		return "", fmt.Errorf("failed to query primary key column: %v", err)
-	}
-	return column, nil
-}
-
 // SaveState saves the current replication state
 func (r *BaseReplicator) SaveState(lsn pglogrepl.LSN) error {
 	state, err := r.NATSClient.GetState()
@@ -568,38 +532,4 @@ func (r *BaseReplicator) CheckReplicationSlotStatus(ctx context.Context) error {
 	}
 	r.Logger.Info().Str("slotName", publicationName).Str("restartLSN", restartLSN).Msg("Replication slot status")
 	return nil
-}
-
-// GetConfiguredTables returns all tables based on configuration
-// If no specific tables are configured, returns all tables from the configured schema
-func (r *BaseReplicator) GetConfiguredTables(ctx context.Context) ([]string, error) {
-	if len(r.Config.Tables) > 0 {
-		fullyQualifiedTables := make([]string, len(r.Config.Tables))
-		for i, table := range r.Config.Tables {
-			fullyQualifiedTables[i] = fmt.Sprintf("%s.%s", r.Config.Schema, table)
-		}
-		return fullyQualifiedTables, nil
-	}
-
-	rows, err := r.StandardConn.Query(ctx, `
-		SELECT schemaname || '.' || tablename
-		FROM pg_tables
-		WHERE schemaname = $1
-		AND schemaname NOT IN ('pg_catalog', 'information_schema', 'internal_pg_flo')
-	`, r.Config.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query tables: %v", err)
-	}
-	defer rows.Close()
-
-	var tables []string
-	for rows.Next() {
-		var tableName string
-		if err := rows.Scan(&tableName); err != nil {
-			return nil, fmt.Errorf("failed to scan table name: %v", err)
-		}
-		tables = append(tables, tableName)
-	}
-
-	return tables, nil
 }

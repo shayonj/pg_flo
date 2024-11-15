@@ -27,7 +27,7 @@ func TestRouter_ApplyRouting(t *testing.T) {
 				},
 			},
 			inputMessage: &utils.CDCMessage{
-				Type:  string(utils.OperationInsert),
+				Type:  utils.OperationInsert,
 				Table: "source_table",
 				Columns: []*pglogrepl.RelationMessageColumn{
 					{Name: "id", DataType: 23},
@@ -35,7 +35,7 @@ func TestRouter_ApplyRouting(t *testing.T) {
 				},
 			},
 			expectedOutput: &utils.CDCMessage{
-				Type:  string(utils.OperationInsert),
+				Type:  utils.OperationInsert,
 				Table: "dest_table",
 				Columns: []*pglogrepl.RelationMessageColumn{
 					{Name: "id", DataType: 23},
@@ -57,7 +57,7 @@ func TestRouter_ApplyRouting(t *testing.T) {
 				},
 			},
 			inputMessage: &utils.CDCMessage{
-				Type:  string(utils.OperationUpdate),
+				Type:  utils.OperationUpdate,
 				Table: "users",
 				Columns: []*pglogrepl.RelationMessageColumn{
 					{Name: "user_id", DataType: 23},
@@ -66,7 +66,7 @@ func TestRouter_ApplyRouting(t *testing.T) {
 				},
 			},
 			expectedOutput: &utils.CDCMessage{
-				Type:  string(utils.OperationUpdate),
+				Type:  utils.OperationUpdate,
 				Table: "customers",
 				Columns: []*pglogrepl.RelationMessageColumn{
 					{Name: "customer_id", DataType: 23},
@@ -85,11 +85,11 @@ func TestRouter_ApplyRouting(t *testing.T) {
 				},
 			},
 			inputMessage: &utils.CDCMessage{
-				Type:  string(utils.OperationUpdate),
+				Type:  utils.OperationUpdate,
 				Table: "orders",
 			},
 			expectedOutput: &utils.CDCMessage{
-				Type:  string(utils.OperationUpdate),
+				Type:  utils.OperationUpdate,
 				Table: "processed_orders",
 			},
 		},
@@ -103,7 +103,7 @@ func TestRouter_ApplyRouting(t *testing.T) {
 				},
 			},
 			inputMessage: &utils.CDCMessage{
-				Type:  string(utils.OperationDelete),
+				Type:  utils.OperationDelete,
 				Table: "orders",
 			},
 			expectNil: true,
@@ -112,11 +112,11 @@ func TestRouter_ApplyRouting(t *testing.T) {
 			name:   "No route for table",
 			routes: map[string]routing.TableRoute{},
 			inputMessage: &utils.CDCMessage{
-				Type:  string(utils.OperationInsert),
+				Type:  utils.OperationInsert,
 				Table: "unknown_table",
 			},
 			expectedOutput: &utils.CDCMessage{
-				Type:  string(utils.OperationInsert),
+				Type:  utils.OperationInsert,
 				Table: "unknown_table",
 			},
 		},

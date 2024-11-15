@@ -72,7 +72,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				return false
 			}
 
-			assert.Equal(t, "INSERT", decodedMsg.Type)
+			assert.Equal(t, utils.OperationInsert, decodedMsg.Type)
 			assert.Equal(t, "public", decodedMsg.Schema)
 			assert.Equal(t, "users", decodedMsg.Table)
 
@@ -286,7 +286,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					err := decodedMsg.UnmarshalBinary(data)
 					assert.NoError(t, err, "Failed to unmarshal binary data")
 
-					assert.Equal(t, "INSERT", decodedMsg.Type)
+					assert.Equal(t, utils.OperationInsert, decodedMsg.Type)
 					assert.Equal(t, "public", decodedMsg.Schema)
 					assert.Equal(t, "test_table", decodedMsg.Table)
 					assert.Equal(t, len(tc.expected), len(decodedMsg.NewTuple.Columns))

@@ -18,9 +18,9 @@ func NewStdoutSink() (*StdoutSink, error) {
 // WriteBatch writes a batch of data to standard output
 func (s *StdoutSink) WriteBatch(messages []*utils.CDCMessage) error {
 	for _, message := range messages {
-		decodedMessage, err := message.GetDecodedMessage()
+		decodedMessage, err := buildDecodedMessage(message)
 		if err != nil {
-			return fmt.Errorf("failed to get decoded message: %v", err)
+			return fmt.Errorf("failed to build decoded message: %v", err)
 		}
 
 		jsonData, err := json.Marshal(decodedMessage)

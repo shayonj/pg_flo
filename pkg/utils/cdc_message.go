@@ -29,17 +29,16 @@ func init() {
 
 // CDCMessage represents a full message for Change Data Capture
 type CDCMessage struct {
-	Type                   string
-	Schema                 string
-	Table                  string
-	Columns                []*pglogrepl.RelationMessageColumn
-	NewTuple               *pglogrepl.TupleData
-	OldTuple               *pglogrepl.TupleData
-	PrimaryKeyColumn       string
-	LSN                    string
-	EmittedAt              time.Time
-	ToastedColumns         map[string]bool
-	MappedPrimaryKeyColumn string
+	Type           OperationType
+	Schema         string
+	Table          string
+	Columns        []*pglogrepl.RelationMessageColumn
+	NewTuple       *pglogrepl.TupleData
+	OldTuple       *pglogrepl.TupleData
+	ReplicationKey ReplicationKey
+	LSN            string
+	EmittedAt      time.Time
+	ToastedColumns map[string]bool
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface
@@ -66,23 +65,23 @@ func (m *CDCMessage) GetColumnIndex(columnName string) int {
 	return -1
 }
 
-// GetColumnValue returns the typed value of a column
-func (m *CDCMessage) GetColumnValue(columnName string) (interface{}, error) {
+// GetColumnValue gets a column value, optionally using old values for DELETE/UPDATE
+func (m *CDCMessage) GetColumnValue(columnName string, useOldValues bool) (interface{}, error) {
 	colIndex := m.GetColumnIndex(columnName)
 	if colIndex == -1 {
 		return nil, fmt.Errorf("column %s not found", columnName)
 	}
 
-	column := m.Columns[colIndex]
 	var data []byte
-
-	if m.Type == "DELETE" {
+	if useOldValues && m.OldTuple != nil {
 		data = m.OldTuple.Columns[colIndex].Data
-	} else {
+	} else if m.NewTuple != nil {
 		data = m.NewTuple.Columns[colIndex].Data
+	} else {
+		return nil, fmt.Errorf("no data available for column %s", columnName)
 	}
 
-	return DecodeValue(data, column.DataType)
+	return DecodeValue(data, m.Columns[colIndex].DataType)
 }
 
 // SetColumnValue sets the value of a column, respecting its type
@@ -98,7 +97,7 @@ func (m *CDCMessage) SetColumnValue(columnName string, value interface{}) error 
 		return err
 	}
 
-	if m.Type == "DELETE" {
+	if m.Type == OperationDelete {
 		m.OldTuple.Columns[colIndex] = &pglogrepl.TupleDataColumn{Data: encodedValue}
 	} else {
 		m.NewTuple.Columns[colIndex] = &pglogrepl.TupleDataColumn{Data: encodedValue}
@@ -144,7 +143,7 @@ func EncodeCDCMessage(m CDCMessage) ([]byte, error) {
 		}
 	}
 
-	if err := enc.Encode(m.PrimaryKeyColumn); err != nil {
+	if err := enc.Encode(m.ReplicationKey); err != nil {
 		return nil, err
 	}
 
@@ -204,7 +203,7 @@ func DecodeCDCMessage(data []byte) (*CDCMessage, error) {
 		}
 	}
 
-	if err := dec.Decode(&m.PrimaryKeyColumn); err != nil {
+	if err := dec.Decode(&m.ReplicationKey); err != nil {
 		return nil, err
 	}
 
@@ -342,63 +341,6 @@ func DecodeArray(data []byte, dataType uint32) (interface{}, error) {
 // EncodeValue encodes a Go value into a byte slice based on the PostgreSQL data type
 func EncodeValue(value interface{}, dataType uint32) ([]byte, error) {
 	return ConvertToPgCompatibleOutput(value, dataType)
-}
-
-// GetDecodedColumnValue returns the decoded value of a column
-func (m *CDCMessage) GetDecodedColumnValue(columnName string) (interface{}, error) {
-	colIndex := m.GetColumnIndex(columnName)
-	if colIndex == -1 {
-		return nil, fmt.Errorf("column %s not found", columnName)
-	}
-
-	var data []byte
-	if m.NewTuple != nil && colIndex < len(m.NewTuple.Columns) {
-		data = m.NewTuple.Columns[colIndex].Data
-	} else if m.OldTuple != nil && colIndex < len(m.OldTuple.Columns) {
-		data = m.OldTuple.Columns[colIndex].Data
-	} else {
-		return nil, fmt.Errorf("no data available for column %s", columnName)
-	}
-
-	column := m.Columns[colIndex]
-	return DecodeValue(data, column.DataType)
-}
-
-// GetDecodedMessage returns a map with decoded column values
-func (m *CDCMessage) GetDecodedMessage() (map[string]interface{}, error) {
-	decodedMessage := make(map[string]interface{})
-	decodedMessage["Type"] = m.Type
-	decodedMessage["Schema"] = m.Schema
-	decodedMessage["Table"] = m.Table
-	decodedMessage["PrimaryKeyColumn"] = m.PrimaryKeyColumn
-	decodedMessage["LSN"] = m.LSN
-	decodedMessage["EmittedAt"] = m.EmittedAt
-
-	if m.NewTuple != nil {
-		newTuple := make(map[string]interface{})
-		for _, col := range m.Columns {
-			value, err := m.GetDecodedColumnValue(col.Name)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode column %s: %v", col.Name, err)
-			}
-			newTuple[col.Name] = value
-		}
-		decodedMessage["NewTuple"] = newTuple
-	}
-
-	if m.OldTuple != nil {
-		oldTuple := make(map[string]interface{})
-		for _, col := range m.Columns {
-			value, err := m.GetDecodedColumnValue(col.Name)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode column %s: %v", col.Name, err)
-			}
-			oldTuple[col.Name] = value
-		}
-		decodedMessage["OldTuple"] = oldTuple
-	}
-
-	return decodedMessage, nil
 }
 
 // IsColumnToasted checks if a column was TOASTed
