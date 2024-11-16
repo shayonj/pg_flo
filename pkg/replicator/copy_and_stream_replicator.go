@@ -42,18 +42,7 @@ func (r *CopyAndStreamReplicator) Start(ctx context.Context) error {
 		return nil
 	}
 
-	startLSN := r.LastLSN
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- r.StartReplicationFromLSN(ctx, startLSN, r.stopChan)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-errChan:
-		return err
-	}
+	return r.StartReplicationFromLSN(ctx, r.LastLSN, r.stopChan)
 }
 
 func (r *CopyAndStreamReplicator) Stop(ctx context.Context) error {
