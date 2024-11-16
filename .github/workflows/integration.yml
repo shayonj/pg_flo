@@ -10,102 +10,55 @@ permissions:
   actions: write
 
 jobs:
-  # Basic functionality tests
-  stream_only_test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: "1.21"
-      - name: Build pg_flo
-        run: make build
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client jq ruby ruby-dev libpq-dev build-essential
-          sudo gem install pg
-      - name: Set up Docker Compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Run test
-        env:
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_USER: myuser
-          PG_PASSWORD: mypassword!@#%1234
-          PG_DB: mydb
-        working-directory: .
-        run: |
-          docker-compose -f internal/docker-compose.yml up -d
-          sleep 10
-          ./internal/scripts/e2e_test_stream.sh
-          docker-compose -f internal/docker-compose.yml down -v
 
-  # Data integrity and consistency tests
-  copy_test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - name: Build
+        run: make build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v3
         with:
-          go-version: "1.21"
-      - name: Build pg_flo
-        run: make build
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client jq ruby ruby-dev libpq-dev build-essential
-          sudo gem install pg
-      - name: Set up Docker Compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Run test
-        env:
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_USER: myuser
-          PG_PASSWORD: mypassword!@#%1234
-          PG_DB: mydb
-          TARGET_PG_HOST: localhost
-          TARGET_PG_PORT: 5434
-          TARGET_PG_USER: targetuser
-          TARGET_PG_PASSWORD: targetpassword!@#1234
-          TARGET_PG_DB: targetdb
-        working-directory: .
-        run: |
-          docker-compose -f internal/docker-compose.yml up -d
-          sleep 10
-          ./internal/scripts/e2e_copy_only.sh
-          docker-compose -f internal/docker-compose.yml down -v
+          name: pg_flo-binary
+          path: bin/pg_flo
 
-  # Advanced feature tests (runs in parallel)
-  feature_tests:
+  tests:
+    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         test:
           [
+            stream_only,
+            copy_only,
             transform_filter,
             ddl,
             postgres,
             postgres_data_type,
             multi_tenant,
             routing,
+            copy_and_stream,
+            order,
+            resume,
+            postgres_uniqueness,
           ]
     steps:
       - uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - name: Download binary
+        uses: actions/download-artifact@v3
         with:
-          go-version: "1.21"
-      - name: Build pg_flo
-        run: make build
+          name: pg_flo-binary
+          path: bin
+      - name: Make binary executable
+        run: chmod +x bin/pg_flo
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -127,164 +80,12 @@ jobs:
           TARGET_PG_USER: targetuser
           TARGET_PG_PASSWORD: targetpassword!@#1234
           TARGET_PG_DB: targetdb
-        working-directory: .
         run: |
           docker-compose -f internal/docker-compose.yml up -d
           sleep 10
-          ./internal/scripts/e2e_${{ matrix.test }}.sh
-          docker-compose -f internal/docker-compose.yml down -v
-
-  # Transaction ordering test
-  order_test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.21"
-      - name: Build pg_flo
-        run: make build
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client jq ruby ruby-dev libpq-dev build-essential
-          sudo gem install pg
-      - name: Set up Docker Compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Run test
-        env:
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_USER: myuser
-          PG_PASSWORD: mypassword!@#%1234
-          PG_DB: mydb
-          TARGET_PG_HOST: localhost
-          TARGET_PG_PORT: 5434
-          TARGET_PG_USER: targetuser
-          TARGET_PG_PASSWORD: targetpassword!@#1234
-          TARGET_PG_DB: targetdb
-        working-directory: .
-        run: |
-          docker-compose -f internal/docker-compose.yml up -d
-          sleep 10
-          ruby ./internal/scripts/e2e_order_test.rb
-          docker-compose -f internal/docker-compose.yml down -v
-
-  # Combined copy and stream test
-  copy_and_stream_test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.21"
-      - name: Build pg_flo
-        run: make build
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client jq ruby ruby-dev libpq-dev build-essential
-          sudo gem install pg
-      - name: Set up Docker Compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Run test
-        env:
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_USER: myuser
-          PG_PASSWORD: mypassword!@#%1234
-          PG_DB: mydb
-          TARGET_PG_HOST: localhost
-          TARGET_PG_PORT: 5434
-          TARGET_PG_USER: targetuser
-          TARGET_PG_PASSWORD: targetpassword!@#1234
-          TARGET_PG_DB: targetdb
-        working-directory: .
-        run: |
-          docker-compose -f internal/docker-compose.yml up -d
-          sleep 10
-          ./internal/scripts/e2e_copy_and_stream.sh
-          docker-compose -f internal/docker-compose.yml down -v
-
-  # Resume capability test
-  resume_test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.21"
-      - name: Build pg_flo
-        run: make build
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client jq ruby ruby-dev libpq-dev build-essential
-          sudo gem install pg
-      - name: Set up Docker Compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Run test
-        env:
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_USER: myuser
-          PG_PASSWORD: mypassword!@#%1234
-          PG_DB: mydb
-          TARGET_PG_HOST: localhost
-          TARGET_PG_PORT: 5434
-          TARGET_PG_USER: targetuser
-          TARGET_PG_PASSWORD: targetpassword!@#1234
-          TARGET_PG_DB: targetdb
-        working-directory: .
-        run: |
-          docker-compose -f internal/docker-compose.yml up -d
-          sleep 10
-          ruby ./internal/scripts/e2e_resume_test.rb
-          docker-compose -f internal/docker-compose.yml down -v
-
-  postgres_uniqueness_test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.21"
-      - name: Build pg_flo
-        run: make build
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client jq ruby ruby-dev libpq-dev build-essential
-          sudo gem install pg
-      - name: Set up Docker Compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Run test
-        env:
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_USER: myuser
-          PG_PASSWORD: mypassword!@#%1234
-          PG_DB: mydb
-          TARGET_PG_HOST: localhost
-          TARGET_PG_PORT: 5434
-          TARGET_PG_USER: targetuser
-          TARGET_PG_PASSWORD: targetpassword!@#1234
-          TARGET_PG_DB: targetdb
-        working-directory: .
-        run: |
-          docker-compose -f internal/docker-compose.yml up -d
-          sleep 10
-          ruby ./internal/scripts/e2e_postgres_uniquness.rb
+          if [[ "${{ matrix.test }}" == "order" || "${{ matrix.test }}" == "resume" || "${{ matrix.test }}" == "postgres_uniqueness" ]]; then
+            ruby ./internal/scripts/e2e_${{ matrix.test }}_test.rb
+          else
+            ./internal/scripts/e2e_${{ matrix.test }}.sh
+          fi
           docker-compose -f internal/docker-compose.yml down -v
