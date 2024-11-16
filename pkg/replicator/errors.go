@@ -1,6 +1,15 @@
 package replicator
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+var (
+	ErrReplicatorAlreadyStarted = errors.New("replicator already started")
+	ErrReplicatorNotStarted     = errors.New("replicator not started")
+	ErrReplicatorAlreadyStopped = errors.New("replicator already stopped")
+)
 
 // ReplicationError represents an error that occurred during replication.
 type ReplicationError struct {

@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/pgflo/pg_flo/pkg/pgflonats"
 	"github.com/pgflo/pg_flo/pkg/replicator"
@@ -295,13 +296,60 @@ func runReplicator(_ *cobra.Command, _ []string) {
 		factory = &replicator.StreamReplicatorFactory{}
 	}
 
+	// Create base context for the entire application
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	rep, err := factory.CreateReplicator(config, natsClient)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create replicator")
 	}
 
-	if err := rep.StartReplication(); err != nil {
-		log.Fatal().Err(err).Msg("Failed to start replication")
+	// Setup signal handling
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Error channel to capture any replication errors
+	errCh := make(chan error, 1)
+
+	// Start replication in a goroutine
+	go func() {
+		if err := rep.Start(ctx); err != nil {
+			errCh <- err
+		}
+	}()
+
+	// Wait for either a signal or an error
+	select {
+	case sig := <-sigCh:
+		log.Info().Str("signal", sig.String()).Msg("Received shutdown signal")
+
+		// Create a new context with timeout for graceful shutdown
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+
+		// Cancel the main context first
+		cancel()
+
+		// Then call Stop with the timeout context
+		if err := rep.Stop(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("Error during replication shutdown")
+			os.Exit(1)
+		}
+		log.Info().Msg("Replication stopped successfully")
+
+	case err := <-errCh:
+		log.Error().Err(err).Msg("Replication error occurred")
+
+		// Create shutdown context for cleanup
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+
+		// Attempt cleanup even if there was an error
+		if stopErr := rep.Stop(shutdownCtx); stopErr != nil {
+			log.Error().Err(stopErr).Msg("Additional error during shutdown")
+		}
+		os.Exit(1)
 	}
 }
 

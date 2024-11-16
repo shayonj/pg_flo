@@ -41,28 +41,7 @@ func (f *StreamReplicatorFactory) CreateReplicator(config Config, natsClient NAT
 	}
 
 	baseReplicator := NewBaseReplicator(config, replicationConn, standardConn, natsClient)
-
-	var ddlReplicator *DDLReplicator
-	if config.TrackDDL {
-		ddlConn, err := NewStandardConnection(config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create DDL connection: %v", err)
-		}
-		ddlReplicator, err = NewDDLReplicator(config, baseReplicator, ddlConn)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create DDL replicator: %v", err)
-		}
-	}
-
-	streamReplicator := &StreamReplicator{
-		BaseReplicator: *baseReplicator,
-	}
-
-	if ddlReplicator != nil {
-		streamReplicator.DDLReplicator = *ddlReplicator
-	}
-
-	return streamReplicator, nil
+	return &StreamReplicator{BaseReplicator: baseReplicator}, nil
 }
 
 // CopyAndStreamReplicatorFactory creates `CopyAndStreamReplicator` instances
@@ -81,31 +60,13 @@ func (f *CopyAndStreamReplicatorFactory) CreateReplicator(config Config, natsCli
 
 	baseReplicator := NewBaseReplicator(config, replicationConn, standardConn, natsClient)
 
-	var ddlReplicator *DDLReplicator
-	if config.TrackDDL {
-		ddlConn, err := NewStandardConnection(config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create DDL connection: %v", err)
-		}
-		ddlReplicator, err = NewDDLReplicator(config, baseReplicator, ddlConn)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create DDL replicator: %v", err)
-		}
-	}
-
 	if f.MaxCopyWorkersPerTable <= 0 {
 		f.MaxCopyWorkersPerTable = 4
 	}
 
-	copyAndStreamReplicator := &CopyAndStreamReplicator{
-		BaseReplicator:         *baseReplicator,
-		MaxCopyWorkersPerTable: f.MaxCopyWorkersPerTable,
-		CopyOnly:               f.CopyOnly,
-	}
-
-	if ddlReplicator != nil {
-		copyAndStreamReplicator.DDLReplicator = *ddlReplicator
-	}
-
-	return copyAndStreamReplicator, nil
+	return NewCopyAndStreamReplicator(
+		baseReplicator,
+		f.MaxCopyWorkersPerTable,
+		f.CopyOnly,
+	), nil
 }

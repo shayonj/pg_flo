@@ -120,30 +120,14 @@ func (d *DDLReplicator) StartDDLReplication(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			d.BaseRepl.Logger.Info().Msg("Finishing processing of DDL events... (this can take a while)")
-
-			// Create a new context without cancellation to process remaining events
-			// Alternatively, when a shutdown is received we can trigger a ROLLBACK too ?
-			shutdownCtx := context.Background()
-
-			for {
-				hasEvents, err := d.HasPendingDDLEvents(shutdownCtx)
-				if err != nil {
-					d.BaseRepl.Logger.Error().Err(err).Msg("Failed to check for pending DDL events during shutdown")
-					break
-				}
-				if !hasEvents {
-					break
-				}
-				if err := d.ProcessDDLEvents(shutdownCtx); err != nil {
-					d.BaseRepl.Logger.Error().Err(err).Msg("Failed to process DDL events during shutdown")
-				}
-
-				time.Sleep(100 * time.Millisecond)
-			}
+			d.BaseRepl.Logger.Info().Msg("DDL replication stopping...")
 			return
 		case <-ticker.C:
 			if err := d.ProcessDDLEvents(ctx); err != nil {
+				if ctx.Err() != nil {
+					// Context canceled, exit gracefully
+					return
+				}
 				d.BaseRepl.Logger.Error().Err(err).Msg("Failed to process DDL events")
 			}
 		}
@@ -153,9 +137,9 @@ func (d *DDLReplicator) StartDDLReplication(ctx context.Context) {
 // ProcessDDLEvents processes DDL events from the log table
 func (d *DDLReplicator) ProcessDDLEvents(ctx context.Context) error {
 	rows, err := d.DDLConn.Query(ctx, `
-		SELECT id, event_type, object_type, object_identity, table_name, ddl_command, created_at
-		FROM internal_pg_flo.ddl_log
-		ORDER BY created_at ASC
+			SELECT id, event_type, object_type, object_identity, table_name, ddl_command, created_at
+			FROM internal_pg_flo.ddl_log
+			ORDER BY created_at ASC
 	`)
 	if err != nil {
 		d.BaseRepl.Logger.Error().Err(err).Msg("Failed to query DDL log")
@@ -261,14 +245,34 @@ func (d *DDLReplicator) Close(ctx context.Context) error {
 // Shutdown performs a graceful shutdown of the DDL replicator
 func (d *DDLReplicator) Shutdown(ctx context.Context) error {
 	d.BaseRepl.Logger.Info().Msg("Shutting down DDL replicator")
-	if ctx.Err() != nil {
-		ctx = context.Background()
-	}
+
+	// Process remaining events with the provided context
 	if err := d.ProcessDDLEvents(ctx); err != nil {
 		d.BaseRepl.Logger.Error().Err(err).Msg("Failed to process final DDL events")
-		return err
+		// Continue with shutdown even if processing fails
 	}
-	return d.Close(ctx)
+
+	// Wait for any pending events with respect to context deadline
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			d.BaseRepl.Logger.Warn().Msg("Context deadline exceeded while waiting for DDL events")
+			return ctx.Err()
+		case <-ticker.C:
+			hasEvents, err := d.HasPendingDDLEvents(ctx)
+			if err != nil {
+				d.BaseRepl.Logger.Error().Err(err).Msg("Failed to check pending DDL events")
+				return err
+			}
+			if !hasEvents {
+				d.BaseRepl.Logger.Info().Msg("All DDL events processed")
+				return d.Close(ctx)
+			}
+		}
+	}
 }
 
 // HasPendingDDLEvents checks if there are pending DDL events in the log
