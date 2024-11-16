@@ -74,7 +74,7 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
-            DATE=${{ format('2006-01-02T15:04:05Z') }}
+            DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
       - name: Extract metadata (pgflo)
         id: meta_pgflo
@@ -103,4 +103,4 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
-            DATE=${{ format('2006-01-02T15:04:05Z') }}
+            DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
