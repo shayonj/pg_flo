@@ -14,9 +14,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/shayonj/pg_flo/cmd.version={{.Version}}
-      - -X github.com/shayonj/pg_flo/cmd.commit={{.Commit}}
-      - -X github.com/shayonj/pg_flo/cmd.date={{.Date}}
+      - -X github.com/pgflo/pg_flo/cmd.version={{.Version}}
+      - -X github.com/pgflo/pg_flo/cmd.commit={{.Commit}}
+      - -X github.com/pgflo/pg_flo/cmd.date={{.Date}}
     binary: pg_flo
 
 archives:

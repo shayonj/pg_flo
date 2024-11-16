@@ -18,14 +18,14 @@ docker run -d --name pg_flo_nats \
 docker run -d --name pg_flo_replicator \
   --network host \
   -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
-  shayonj/pg_flo:latest \
+  pgflo/pg_flo:latest \
   replicator --config /etc/pg_flo/config.yaml
 
 # Start worker
 docker run -d --name pg_flo_worker \
   --network host \
   -v /path/to/config.yaml:/etc/pg_flo/config.yaml \
-  shayonj/pg_flo:latest \
+  pgflo/pg_flo:latest \
   worker postgres --config /etc/pg_flo/config.yaml
 ```
 

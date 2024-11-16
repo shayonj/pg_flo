@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/shayonj/pg_flo/cmd"
+	"github.com/pgflo/pg_flo/cmd"
 )
 
 func main() {

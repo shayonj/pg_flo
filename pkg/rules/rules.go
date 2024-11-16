@@ -10,8 +10,8 @@ import (
 	"os"
 
 	"github.com/jackc/pgtype"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/rs/zerolog"
-	"github.com/shayonj/pg_flo/pkg/utils"
 	"github.com/shopspring/decimal"
 )
 

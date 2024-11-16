@@ -1,4 +1,4 @@
-module github.com/shayonj/pg_flo
+module github.com/pgflo/pg_flo
 
 go 1.21.5
 

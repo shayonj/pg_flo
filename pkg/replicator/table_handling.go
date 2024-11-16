@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 // AddPrimaryKeyInfo adds replication key information to the CDCMessage

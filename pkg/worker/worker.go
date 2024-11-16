@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go" // Use the standard NATS package
+	"github.com/pgflo/pg_flo/pkg/pgflonats"
+	"github.com/pgflo/pg_flo/pkg/routing"
+	"github.com/pgflo/pg_flo/pkg/rules"
+	"github.com/pgflo/pg_flo/pkg/sinks"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/shayonj/pg_flo/pkg/pgflonats"
-	"github.com/shayonj/pg_flo/pkg/routing"
-	"github.com/shayonj/pg_flo/pkg/rules"
-	"github.com/shayonj/pg_flo/pkg/sinks"
-	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 // Worker represents a worker that processes messages from NATS.

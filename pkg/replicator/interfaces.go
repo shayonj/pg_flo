@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/nats-io/nats.go"
-	"github.com/shayonj/pg_flo/pkg/pgflonats"
+	"github.com/pgflo/pg_flo/pkg/pgflonats"
 )
 
 type Replicator interface {

@@ -7,9 +7,9 @@ import (
 	"os"
 
 	"github.com/goccy/go-json"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 func init() {

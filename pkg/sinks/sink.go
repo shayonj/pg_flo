@@ -1,7 +1,7 @@
 package sinks
 
 import (
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 type Sink interface {

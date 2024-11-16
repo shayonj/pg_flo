@@ -4,9 +4,9 @@ import (
 	"sync"
 
 	"github.com/jackc/pglogrepl"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 type ColumnMapping struct {

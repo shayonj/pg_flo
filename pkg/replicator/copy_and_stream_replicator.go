@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 func (r *CopyAndStreamReplicator) NewBaseReplicator() *BaseReplicator {
