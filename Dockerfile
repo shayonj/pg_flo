@@ -1,4 +1,5 @@
 FROM golang:1.21-alpine AS builder
+RUN apk update && apk upgrade --no-cache
 WORKDIR /app
 COPY . .
 ARG VERSION=dev
@@ -12,6 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -v \
   -o pg_flo .
 
 FROM alpine:latest
-RUN apk add --no-cache postgresql15-client
+RUN apk update && apk upgrade --no-cache && \
+  apk add --no-cache postgresql15-client
 COPY --from=builder /app/pg_flo /usr/local/bin/
 ENTRYPOINT ["pg_flo"]
