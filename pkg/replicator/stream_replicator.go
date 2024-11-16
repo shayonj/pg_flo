@@ -27,6 +27,8 @@ func (r *StreamReplicator) Start(ctx context.Context) error {
 		startLSN = pglogrepl.LSN(0)
 	}
 
+	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Starting replication")
+
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- r.StartReplicationFromLSN(ctx, startLSN, r.stopChan)

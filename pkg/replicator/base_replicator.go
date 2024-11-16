@@ -27,6 +27,7 @@ type BaseReplicator struct {
 	Config               Config
 	ReplicationConn      ReplicationConnection
 	StandardConn         StandardConnection
+	DDLReplicator        *DDLReplicator
 	Relations            map[uint32]*pglogrepl.RelationMessage
 	Logger               utils.Logger
 	TableDetails         map[string][]string
@@ -55,6 +56,15 @@ func NewBaseReplicator(config Config, replicationConn ReplicationConnection, sta
 		Logger:          logger,
 		TableDetails:    make(map[string][]string),
 		NATSClient:      natsClient,
+	}
+
+	if config.TrackDDL {
+		ddlRepl, err := NewDDLReplicator(config, br, standardConn)
+		if err != nil {
+			br.Logger.Error().Err(err).Msg("Failed to initialize DDL replicator")
+		} else {
+			br.DDLReplicator = ddlRepl
+		}
 	}
 
 	// Initialize the OID map with custom types from the database
@@ -470,10 +480,19 @@ func (r *BaseReplicator) CheckReplicationSlotExists(slotName string) (bool, erro
 func (r *BaseReplicator) GracefulShutdown(ctx context.Context) error {
 	r.Logger.Info().Msg("Initiating graceful shutdown")
 
+	// Send final status update before DDL shutdown
 	if err := r.SendStandbyStatusUpdate(ctx); err != nil {
 		r.Logger.Warn().Err(err).Msg("Failed to send final standby status update")
 	}
 
+	// Shutdown DDL replicator if it exists
+	if r.DDLReplicator != nil {
+		if err := r.DDLReplicator.Shutdown(ctx); err != nil {
+			r.Logger.Warn().Err(err).Msg("Failed to shutdown DDL replicator")
+		}
+	}
+
+	// Save state and close connections
 	if err := r.SaveState(r.LastLSN); err != nil {
 		r.Logger.Warn().Err(err).Msg("Failed to save final state")
 	}
@@ -490,12 +509,30 @@ func (r *BaseReplicator) GracefulShutdown(ctx context.Context) error {
 func (r *BaseReplicator) closeConnections(ctx context.Context) error {
 	r.Logger.Info().Msg("Closing database connections")
 
-	if err := r.ReplicationConn.Close(ctx); err != nil {
-		return fmt.Errorf("failed to close replication connection: %w", err)
+	// Close replication connection first
+	if r.ReplicationConn != nil {
+		if err := r.ReplicationConn.Close(ctx); err != nil {
+			r.Logger.Error().Err(err).Msg("Failed to close replication connection")
+		}
+		r.ReplicationConn = nil
 	}
-	if err := r.StandardConn.Close(ctx); err != nil {
-		return fmt.Errorf("failed to close standard connection: %w", err)
+
+	// Close standard connection
+	if r.StandardConn != nil {
+		if err := r.StandardConn.Close(ctx); err != nil {
+			r.Logger.Error().Err(err).Msg("Failed to close standard connection")
+		}
+		r.StandardConn = nil
 	}
+
+	// Close DDL connection if exists
+	if r.DDLReplicator != nil && r.DDLReplicator.DDLConn != nil {
+		if err := r.DDLReplicator.DDLConn.Close(ctx); err != nil {
+			r.Logger.Error().Err(err).Msg("Failed to close DDL connection")
+		}
+		r.DDLReplicator.DDLConn = nil
+	}
+
 	return nil
 }
 
@@ -542,20 +579,22 @@ func (r *BaseReplicator) Start(ctx context.Context) error {
 	r.stopChan = make(chan struct{})
 	r.mu.Unlock()
 
-	// Initialize connections
-	if err := r.ReplicationConn.Connect(ctx); err != nil {
-		return fmt.Errorf("failed to connect replication connection: %w", err)
-	}
-	if err := r.StandardConn.Connect(ctx); err != nil {
-		return fmt.Errorf("failed to connect standard connection: %w", err)
-	}
-
-	// Create publication and replication slot
+	// Create publication first (uses standard connection)
 	if err := r.CreatePublication(); err != nil {
 		return fmt.Errorf("failed to create publication: %w", err)
 	}
+
+	// Create replication slot (uses standard connection)
 	if err := r.CreateReplicationSlot(ctx); err != nil {
 		return fmt.Errorf("failed to create replication slot: %w", err)
+	}
+
+	// Setup and start DDL tracking if enabled
+	if r.Config.TrackDDL && r.DDLReplicator != nil {
+		if err := r.DDLReplicator.SetupDDLTracking(ctx); err != nil {
+			return fmt.Errorf("failed to setup DDL tracking: %w", err)
+		}
+		go r.DDLReplicator.StartDDLReplication(ctx)
 	}
 
 	return nil

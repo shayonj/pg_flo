@@ -16,10 +16,10 @@ require 'logger'
 require 'securerandom'
 
 class ResumeTest
-  TOTAL_INSERTS = 3000
-  INSERTS_BEFORE_INTERRUPT = 1000
-  RESUME_WAIT_TIME = 2 # seconds
-  NUM_GROUPS = 3
+  TOTAL_INSERTS = 5000
+  INSERTS_BEFORE_INTERRUPT = 1500
+  RESUME_WAIT_TIME = 1 # seconds
+  NUM_GROUPS = 4
 
   PG_HOST = 'localhost'
   PG_PORT = 5433
@@ -284,7 +284,7 @@ class ResumeTest
     @logger.info "Waiting for all inserts to complete..."
     threads.each(&:join)
 
-    sleep 5
+    sleep 20
 
     @logger.info "Sending final SIGTERM to cleanup..."
     @replicator_pids.each do |pid|

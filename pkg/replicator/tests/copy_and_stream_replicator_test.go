@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pgflo/pg_flo/pkg/replicator"
 	"github.com/pgflo/pg_flo/pkg/utils"
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -37,6 +36,24 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				return nil
 			},
 		})
+
+		mockOIDRows := new(MockRows)
+		mockOIDRows.On("Next").Return(false)
+		mockOIDRows.On("Err").Return(nil)
+		mockOIDRows.On("Close").Return()
+
+		mockPKRows := new(MockRows)
+		mockPKRows.On("Next").Return(false)
+		mockPKRows.On("Err").Return(nil)
+		mockPKRows.On("Close").Return()
+
+		mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+			return strings.Contains(q, "pg_type")
+		}), mock.Anything).Return(mockOIDRows, nil)
+
+		mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+			return strings.Contains(q, "table_info")
+		}), mock.Anything).Return(mockPKRows, nil)
 
 		mockPoolConn.On("BeginTx", mock.Anything, mock.MatchedBy(func(txOptions pgx.TxOptions) bool {
 			return txOptions.IsoLevel == pgx.Serializable && txOptions.AccessMode == pgx.ReadOnly
@@ -91,11 +108,8 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		})).Return(nil)
 
 		csr := &replicator.CopyAndStreamReplicator{
-			BaseReplicator: replicator.BaseReplicator{
-				StandardConn: mockStandardConn,
-				NATSClient:   mockNATSClient,
-				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
-				Config: replicator.Config{
+			BaseReplicator: replicator.NewBaseReplicator(
+				replicator.Config{
 					Tables:   []string{"users"},
 					Schema:   "public",
 					Host:     "localhost",
@@ -105,7 +119,10 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					Database: "testdb",
 					Group:    "test_group",
 				},
-			},
+				nil,
+				mockStandardConn,
+				mockNATSClient,
+			),
 			MaxCopyWorkersPerTable: 2,
 		}
 
@@ -120,6 +137,8 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockTx.AssertExpectations(t)
 		mockRows.AssertExpectations(t)
 		mockNATSClient.AssertExpectations(t)
+		mockOIDRows.AssertExpectations(t)
+		mockPKRows.AssertExpectations(t)
 	})
 
 	t.Run("CopyTableRange", func(t *testing.T) {
@@ -146,6 +165,24 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 			},
 		})
 
+		mockOIDRows := new(MockRows)
+		mockOIDRows.On("Next").Return(false)
+		mockOIDRows.On("Err").Return(nil)
+		mockOIDRows.On("Close").Return()
+
+		mockPKRows := new(MockRows)
+		mockPKRows.On("Next").Return(false)
+		mockPKRows.On("Err").Return(nil)
+		mockPKRows.On("Close").Return()
+
+		mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+			return strings.Contains(q, "pg_type")
+		}), mock.Anything).Return(mockOIDRows, nil)
+
+		mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+			return strings.Contains(q, "table_info")
+		}), mock.Anything).Return(mockPKRows, nil)
+
 		mockRows.On("Next").Return(true).Once().On("Next").Return(false)
 		mockRows.On("Err").Return(nil)
 		mockRows.On("Close").Return()
@@ -162,11 +199,8 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockNATSClient.On("PublishMessage", "pgflo.test_group", mock.Anything).Return(nil)
 
 		csr := &replicator.CopyAndStreamReplicator{
-			BaseReplicator: replicator.BaseReplicator{
-				StandardConn: mockStandardConn,
-				NATSClient:   mockNATSClient,
-				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
-				Config: replicator.Config{
+			BaseReplicator: replicator.NewBaseReplicator(
+				replicator.Config{
 					Tables:   []string{"users"},
 					Schema:   "public",
 					Host:     "localhost",
@@ -176,7 +210,10 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					Database: "testdb",
 					Group:    "test_group",
 				},
-			},
+				nil,
+				mockStandardConn,
+				mockNATSClient,
+			),
 		}
 
 		rowsCopied, err := csr.CopyTableRange(context.Background(), "users", 0, 1000, "snapshot-1", 0)
@@ -188,6 +225,8 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 		mockTx.AssertExpectations(t)
 		mockRows.AssertExpectations(t)
 		mockNATSClient.AssertExpectations(t)
+		mockOIDRows.AssertExpectations(t)
+		mockPKRows.AssertExpectations(t)
 	})
 	t.Run("CopyTableRange with diverse data types", func(t *testing.T) {
 		testCases := []struct {
@@ -271,6 +310,24 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					},
 				})
 
+				mockOIDRows := new(MockRows)
+				mockOIDRows.On("Next").Return(false)
+				mockOIDRows.On("Err").Return(nil)
+				mockOIDRows.On("Close").Return()
+
+				mockPKRows := new(MockRows)
+				mockPKRows.On("Next").Return(false)
+				mockPKRows.On("Err").Return(nil)
+				mockPKRows.On("Close").Return()
+
+				mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+					return strings.Contains(q, "pg_type")
+				}), mock.Anything).Return(mockOIDRows, nil)
+
+				mockStandardConn.On("Query", mock.Anything, mock.MatchedBy(func(q string) bool {
+					return strings.Contains(q, "table_info")
+				}), mock.Anything).Return(mockPKRows, nil)
+
 				mockRows.On("Next").Return(true).Once().On("Next").Return(false)
 				mockRows.On("Err").Return(nil)
 				mockRows.On("Close").Return()
@@ -336,11 +393,8 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				})).Return(nil)
 
 				csr := &replicator.CopyAndStreamReplicator{
-					BaseReplicator: replicator.BaseReplicator{
-						StandardConn: mockStandardConn,
-						NATSClient:   mockNATSClient,
-						Logger:       utils.NewZerologLogger(zerolog.New(nil)),
-						Config: replicator.Config{
+					BaseReplicator: replicator.NewBaseReplicator(
+						replicator.Config{
 							Tables:   []string{"test_table"},
 							Schema:   "public",
 							Host:     "localhost",
@@ -350,7 +404,10 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 							Database: "testdb",
 							Group:    "test_group",
 						},
-					},
+						nil,
+						mockStandardConn,
+						mockNATSClient,
+					),
 				}
 
 				rowsCopied, err := csr.CopyTableRange(context.Background(), "test_table", 0, 1000, "snapshot-1", 0)
@@ -363,6 +420,8 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 				mockTx.AssertExpectations(t)
 				mockRows.AssertExpectations(t)
 				mockNATSClient.AssertExpectations(t)
+				mockOIDRows.AssertExpectations(t)
+				mockPKRows.AssertExpectations(t)
 			})
 		}
 	})
