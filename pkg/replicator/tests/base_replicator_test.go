@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"strconv"
 	"strings"
 	"testing"
@@ -90,7 +89,7 @@ func TestBaseReplicator(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				Config:       replicator.Config{Group: "existing_pub"},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.Nop(),
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.CreatePublication()
@@ -121,7 +120,7 @@ func TestBaseReplicator(t *testing.T) {
 					Tables: []string{"users", "orders"},
 				},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.Nop(),
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.CreatePublication()
@@ -141,7 +140,7 @@ func TestBaseReplicator(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				Config:       replicator.Config{Group: "error_pub"},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.Nop(),
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.CreatePublication()
@@ -194,7 +193,7 @@ func TestBaseReplicator(t *testing.T) {
 					Schema: "public",
 				},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.Nop(),
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.CreatePublication()
@@ -255,7 +254,7 @@ func TestBaseReplicator(t *testing.T) {
 					Schema: "public",
 				},
 				StandardConn: mockStandardConn,
-				Logger:       zerolog.Nop(),
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.CreatePublication()
@@ -305,7 +304,7 @@ func TestBaseReplicator(t *testing.T) {
 				StandardConn:    mockStandardConn,
 				NATSClient:      mockNATSClient,
 				Config:          replicator.Config{Group: "test_pub"},
-				Logger:          zerolog.Nop(),
+				Logger:          utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -329,7 +328,7 @@ func TestBaseReplicator(t *testing.T) {
 				ReplicationConn: mockReplicationConn,
 				StandardConn:    mockStandardConn,
 				Config:          replicator.Config{Group: "test_pub"},
-				Logger:          zerolog.Nop(),
+				Logger:          utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			stopChan := make(chan struct{})
@@ -346,6 +345,7 @@ func TestBaseReplicator(t *testing.T) {
 			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
+				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -397,6 +397,7 @@ func TestBaseReplicator(t *testing.T) {
 		t.Run("Unknown relation ID", func(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				Relations: make(map[uint32]*pglogrepl.RelationMessage),
+				Logger:    utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			msg := &pglogrepl.InsertMessage{RelationID: 999}
@@ -514,6 +515,7 @@ func TestBaseReplicator(t *testing.T) {
 
 					br := &replicator.BaseReplicator{
 						NATSClient: mockNATSClient,
+						Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 						Relations: map[uint32]*pglogrepl.RelationMessage{
 							1: {
 								RelationID:   1,
@@ -606,6 +608,7 @@ func TestBaseReplicator(t *testing.T) {
 			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
+				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -661,6 +664,7 @@ func TestBaseReplicator(t *testing.T) {
 
 		t.Run("Unknown relation ID", func(t *testing.T) {
 			br := &replicator.BaseReplicator{
+				Logger:    utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: make(map[uint32]*pglogrepl.RelationMessage),
 			}
 
@@ -676,6 +680,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
+				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -735,6 +740,7 @@ func TestBaseReplicator(t *testing.T) {
 			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
+				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -801,7 +807,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
-				Logger:     zerolog.Nop(),
+				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			msg := &pglogrepl.CommitMessage{
@@ -826,6 +832,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
+				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 				Config: replicator.Config{
 					Group: "test_group",
 				},
@@ -884,6 +891,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
+				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
 				Config: replicator.Config{
 					Group: "test_group",
 				},
@@ -972,6 +980,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
+				Logger:          utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.SendStandbyStatusUpdate(context.Background())
@@ -985,8 +994,8 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				ReplicationConn: mockReplicationConn,
+				Logger:          utils.NewZerologLogger(zerolog.New(nil)),
 				LastLSN:         pglogrepl.LSN(100),
-				Logger:          zerolog.New(ioutil.Discard),
 			}
 
 			mockReplicationConn.On("SendStandbyStatusUpdate",
@@ -1017,6 +1026,7 @@ func TestBaseReplicator(t *testing.T) {
 			br := &replicator.BaseReplicator{
 				StandardConn:    mockStandardConn,
 				ReplicationConn: mockReplicationConn,
+				Logger:          utils.NewZerologLogger(zerolog.New(nil)),
 				Config: replicator.Config{
 					Group: "test_group",
 				},
@@ -1054,7 +1064,7 @@ func TestBaseReplicator(t *testing.T) {
 				Config: replicator.Config{
 					Group: "test_group",
 				},
-				Logger: zerolog.Nop(),
+				Logger: utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.CreateReplicationSlot(context.Background())
@@ -1085,7 +1095,7 @@ func TestBaseReplicator(t *testing.T) {
 				Config: replicator.Config{
 					Group: "test_group",
 				},
-				Logger: zerolog.Nop(),
+				Logger: utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			err := br.CreateReplicationSlot(context.Background())
@@ -1109,6 +1119,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				StandardConn: mockStandardConn,
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			exists, err := br.CheckReplicationSlotExists("test_slot")
@@ -1129,6 +1140,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				StandardConn: mockStandardConn,
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			exists, err := br.CheckReplicationSlotExists("test_slot")
@@ -1148,6 +1160,7 @@ func TestBaseReplicator(t *testing.T) {
 
 			br := &replicator.BaseReplicator{
 				StandardConn: mockStandardConn,
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 			}
 
 			_, err := br.CheckReplicationSlotExists("test_slot")

@@ -3,7 +3,6 @@ package replicator
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -13,14 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/pgflo/pg_flo/pkg/utils"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
-
-func init() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05.000"})
-	zerolog.TimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
-}
 
 // GeneratePublicationName generates a deterministic publication name based on the group name
 func GeneratePublicationName(group string) string {
@@ -34,7 +27,7 @@ type BaseReplicator struct {
 	ReplicationConn      ReplicationConnection
 	StandardConn         StandardConnection
 	Relations            map[uint32]*pglogrepl.RelationMessage
-	Logger               zerolog.Logger
+	Logger               utils.Logger
 	TableDetails         map[string][]string
 	LastLSN              pglogrepl.LSN
 	NATSClient           NATSClient
@@ -47,7 +40,7 @@ func NewBaseReplicator(config Config, replicationConn ReplicationConnection, sta
 		config.Schema = "public"
 	}
 
-	logger := log.With().Str("component", "replicator").Logger()
+	logger := utils.NewZerologLogger(log.With().Str("component", "replicator").Logger())
 
 	br := &BaseReplicator{
 		Config:          config,

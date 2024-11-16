@@ -13,16 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pgflo/pg_flo/pkg/utils"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
-
-func init() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{
-		Out:        os.Stderr,
-		TimeFormat: "15:04:05.000",
-	})
-}
 
 // PostgresSink represents a sink for PostgreSQL database
 type PostgresSink struct {
@@ -30,6 +22,7 @@ type PostgresSink struct {
 	disableForeignKeyChecks bool
 	connConfig              *pgx.ConnConfig
 	retryConfig             utils.RetryConfig
+	logger                  utils.Logger
 }
 
 // NewPostgresSink creates a new PostgresSink instance
@@ -42,6 +35,7 @@ func NewPostgresSink(targetHost string, targetPort int, targetDBName, targetUser
 	sink := &PostgresSink{
 		connConfig:              connConfig,
 		disableForeignKeyChecks: disableForeignKeyChecks,
+		logger:                  utils.NewZerologLogger(log.With().Str("component", "postgres_sink").Logger()),
 		retryConfig: utils.RetryConfig{
 			MaxAttempts: 5,
 			InitialWait: 1 * time.Second,
@@ -69,7 +63,7 @@ func (s *PostgresSink) connect(ctx context.Context) error {
 	return utils.WithRetry(ctx, s.retryConfig, func() error {
 		conn, err := pgx.ConnectConfig(ctx, s.connConfig)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to connect to database, will retry")
+			s.logger.Error().Err(err).Msg("Failed to connect to database, will retry")
 			return err
 		}
 		connMutex.Lock()
@@ -91,7 +85,7 @@ func (s *PostgresSink) syncSchema(sourceHost string, sourcePort int, sourceDBNam
 	)
 	schemaDump, err := dumpCmd.Output()
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to dump schema from source database")
+		s.logger.Error().Err(err).Msg("Failed to dump schema from source database")
 		return fmt.Errorf("failed to dump schema from source database: %v", err)
 	}
 
@@ -220,7 +214,7 @@ func (s *PostgresSink) handleDelete(tx pgx.Tx, message *utils.CDCMessage) error 
 	}
 
 	if result.RowsAffected() == 0 {
-		log.Warn().
+		s.logger.Warn().
 			Str("table", message.Table).
 			Str("query", query).
 			Interface("values", whereValues).
@@ -262,7 +256,7 @@ func (s *PostgresSink) handleUpdate(tx pgx.Tx, message *utils.CDCMessage) error 
 	}
 
 	if len(setClauses) == 0 {
-		log.Debug().Msg("No columns to update, skipping")
+		s.logger.Debug().Msg("No columns to update, skipping")
 		return nil
 	}
 
@@ -287,7 +281,7 @@ func (s *PostgresSink) handleUpdate(tx pgx.Tx, message *utils.CDCMessage) error 
 	}
 
 	if result.RowsAffected() == 0 {
-		log.Warn().
+		s.logger.Warn().
 			Str("table", message.Table).
 			Str("query", query).
 			Interface("values", values).
@@ -320,7 +314,7 @@ func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) (pgx.Tx, 
 		return tx, fmt.Errorf("DDL command is not a string")
 	}
 
-	log.Debug().Msgf("Executing DDL: %s", ddlString)
+	s.logger.Debug().Msgf("Executing DDL: %s", ddlString)
 
 	if strings.Contains(strings.ToUpper(ddlString), "CONCURRENTLY") {
 		if err := tx.Commit(context.Background()); err != nil {
@@ -329,7 +323,7 @@ func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) (pgx.Tx, 
 
 		if _, err := s.conn.Exec(context.Background(), ddlString); err != nil {
 			if strings.Contains(err.Error(), "does not exist") {
-				log.Warn().Msgf("Ignoring DDL for non-existent object: %s", ddlString)
+				s.logger.Warn().Msgf("Ignoring DDL for non-existent object: %s", ddlString)
 				return s.conn.Begin(context.Background())
 			}
 			return nil, fmt.Errorf("failed to execute concurrent DDL: %v", err)
@@ -341,7 +335,7 @@ func (s *PostgresSink) handleDDL(tx pgx.Tx, message *utils.CDCMessage) (pgx.Tx, 
 	_, err = tx.Exec(context.Background(), ddlString)
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
-			log.Warn().Msgf("Ignoring DDL for non-existent object: %s", ddlString)
+			s.logger.Warn().Msgf("Ignoring DDL for non-existent object: %s", ddlString)
 			return tx, nil
 		}
 		return tx, fmt.Errorf("failed to execute DDL: %v", err)
@@ -385,7 +379,7 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 	defer func() {
 		if tx != nil {
 			if err := tx.Rollback(ctx); err != nil {
-				log.Error().Err(err).Msg("failed to rollback transaction")
+				s.logger.Error().Err(err).Msg("failed to rollback transaction")
 			}
 		}
 	}()
@@ -396,7 +390,7 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 		}
 		defer func() {
 			if err := s.enableForeignKeys(ctx); err != nil {
-				log.Error().Err(err).Msg("failed to re-enable foreign key checks")
+				s.logger.Error().Err(err).Msg("failed to re-enable foreign key checks")
 			}
 		}()
 	}
@@ -442,7 +436,7 @@ func (s *PostgresSink) writeBatchInternal(ctx context.Context, messages []*utils
 		if err != nil || operationErr != nil {
 			if tx != nil {
 				if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-					log.Error().Err(rollbackErr).Msg("failed to rollback transaction")
+					s.logger.Error().Err(rollbackErr).Msg("failed to rollback transaction")
 				}
 			}
 			tx = nil
