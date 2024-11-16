@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"errors"
@@ -32,6 +33,10 @@ type BaseReplicator struct {
 	LastLSN              pglogrepl.LSN
 	NATSClient           NATSClient
 	TableReplicationKeys map[string]utils.ReplicationKey
+	stopChan             chan struct{}
+	started              bool
+	stopped              bool
+	mu                   sync.RWMutex
 }
 
 // NewBaseReplicator creates a new BaseReplicator instance
@@ -525,4 +530,46 @@ func (r *BaseReplicator) CheckReplicationSlotStatus(ctx context.Context) error {
 	}
 	r.Logger.Info().Str("slotName", publicationName).Str("restartLSN", restartLSN).Msg("Replication slot status")
 	return nil
+}
+
+func (r *BaseReplicator) Start(ctx context.Context) error {
+	r.mu.Lock()
+	if r.started {
+		r.mu.Unlock()
+		return ErrReplicatorAlreadyStarted
+	}
+	r.started = true
+	r.stopChan = make(chan struct{})
+	r.mu.Unlock()
+
+	// Initialize connections
+	if err := r.ReplicationConn.Connect(ctx); err != nil {
+		return fmt.Errorf("failed to connect replication connection: %w", err)
+	}
+	if err := r.StandardConn.Connect(ctx); err != nil {
+		return fmt.Errorf("failed to connect standard connection: %w", err)
+	}
+
+	// Create publication and replication slot
+	if err := r.CreatePublication(); err != nil {
+		return fmt.Errorf("failed to create publication: %w", err)
+	}
+	if err := r.CreateReplicationSlot(ctx); err != nil {
+		return fmt.Errorf("failed to create replication slot: %w", err)
+	}
+
+	return nil
+}
+
+func (r *BaseReplicator) Stop(ctx context.Context) error {
+	r.mu.Lock()
+	if !r.started || r.stopped {
+		r.mu.Unlock()
+		return ErrReplicatorNotStarted
+	}
+	r.stopped = true
+	close(r.stopChan)
+	r.mu.Unlock()
+
+	return r.GracefulShutdown(ctx)
 }

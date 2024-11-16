@@ -3,10 +3,7 @@ package replicator
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pglogrepl"
@@ -14,63 +11,30 @@ import (
 	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
-func (r *CopyAndStreamReplicator) NewBaseReplicator() *BaseReplicator {
-	return &r.BaseReplicator
-}
-
 // CopyAndStreamReplicator implements a replication strategy that first copies existing data
 // and then streams changes.
 type CopyAndStreamReplicator struct {
-	BaseReplicator
+	*BaseReplicator
 	MaxCopyWorkersPerTable int
-	DDLReplicator          DDLReplicator
 	CopyOnly               bool
 }
 
+func NewCopyAndStreamReplicator(base *BaseReplicator, maxWorkers int, copyOnly bool) *CopyAndStreamReplicator {
+	return &CopyAndStreamReplicator{
+		BaseReplicator:         base,
+		MaxCopyWorkersPerTable: maxWorkers,
+		CopyOnly:               copyOnly,
+	}
+}
+
 // StartReplication begins the replication process.
-func (r *CopyAndStreamReplicator) StartReplication() error {
-	ctx := context.Background()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	if !r.CopyOnly {
-		if err := r.BaseReplicator.CreatePublication(); err != nil {
-			return fmt.Errorf("failed to create publication: %v", err)
-		}
-
-		if err := r.BaseReplicator.CreateReplicationSlot(ctx); err != nil {
-			return fmt.Errorf("failed to create replication slot: %v", err)
-		}
+func (r *CopyAndStreamReplicator) Start(ctx context.Context) error {
+	if err := r.BaseReplicator.Start(ctx); err != nil {
+		return err
 	}
 
-	// Start DDL replication with its own cancellable context and wait group
-	var ddlWg sync.WaitGroup
-	var ddlCancel context.CancelFunc
-	if r.Config.TrackDDL {
-		if err := r.DDLReplicator.SetupDDLTracking(ctx); err != nil {
-			return fmt.Errorf("failed to set up DDL tracking: %v", err)
-		}
-		ddlCtx, cancel := context.WithCancel(ctx)
-		ddlCancel = cancel
-		ddlWg.Add(1)
-		go func() {
-			defer ddlWg.Done()
-			r.DDLReplicator.StartDDLReplication(ddlCtx)
-		}()
-	}
-	defer func() {
-		if r.Config.TrackDDL {
-			ddlCancel()
-			ddlWg.Wait()
-			if err := r.DDLReplicator.Shutdown(ctx); err != nil {
-				r.Logger.Error().Err(err).Msg("Failed to shutdown DDL replicator")
-			}
-		}
-	}()
-
-	if copyErr := r.ParallelCopy(ctx); copyErr != nil {
-		return fmt.Errorf("failed to perform parallel copy: %v", copyErr)
+	if err := r.ParallelCopy(ctx); err != nil {
+		return fmt.Errorf("failed to perform parallel copy: %w", err)
 	}
 
 	if r.CopyOnly {
@@ -78,47 +42,22 @@ func (r *CopyAndStreamReplicator) StartReplication() error {
 		return nil
 	}
 
-	startLSN := r.BaseReplicator.LastLSN
-
-	r.Logger.Info().Str("startLSN", startLSN.String()).Msg("Starting replication from LSN")
-
-	// Create a stop channel for graceful shutdown
-	stopChan := make(chan struct{})
+	startLSN := r.LastLSN
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- r.BaseReplicator.StartReplicationFromLSN(ctx, startLSN, stopChan)
+		errChan <- r.StartReplicationFromLSN(ctx, startLSN, r.stopChan)
 	}()
 
 	select {
-	case <-sigChan:
-		r.Logger.Info().Msg("Received shutdown signal")
-		// Signal replication loop to stop
-		close(stopChan)
-		// Wait for replication loop to exit
-		<-errChan
-
-		// Signal DDL replication to stop and wait for it to finish
-		if r.Config.TrackDDL {
-			ddlCancel()
-			ddlWg.Wait()
-			if err := r.DDLReplicator.Shutdown(ctx); err != nil {
-				r.Logger.Error().Err(err).Msg("Failed to shutdown DDL replicator")
-			}
-		}
-
-		// Proceed with graceful shutdown
-		if err := r.BaseReplicator.GracefulShutdown(ctx); err != nil {
-			r.Logger.Error().Err(err).Msg("Error during graceful shutdown")
-			return err
-		}
+	case <-ctx.Done():
+		return ctx.Err()
 	case err := <-errChan:
-		if err != nil {
-			r.Logger.Error().Err(err).Msg("Replication ended with error")
-			return err
-		}
+		return err
 	}
+}
 
-	return nil
+func (r *CopyAndStreamReplicator) Stop(ctx context.Context) error {
+	return r.BaseReplicator.Stop(ctx)
 }
 
 // ParallelCopy performs a parallel copy of all specified tables.
