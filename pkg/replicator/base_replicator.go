@@ -357,7 +357,6 @@ func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage, lsn p
 		ToastedColumns: make(map[string]bool),
 	}
 
-	// Track toasted columns
 	for i, col := range relation.Columns {
 		if msg.NewTuple != nil {
 			newVal := msg.NewTuple.Columns[i]
@@ -480,19 +479,16 @@ func (r *BaseReplicator) CheckReplicationSlotExists(slotName string) (bool, erro
 func (r *BaseReplicator) GracefulShutdown(ctx context.Context) error {
 	r.Logger.Info().Msg("Initiating graceful shutdown")
 
-	// Send final status update before DDL shutdown
 	if err := r.SendStandbyStatusUpdate(ctx); err != nil {
 		r.Logger.Warn().Err(err).Msg("Failed to send final standby status update")
 	}
 
-	// Shutdown DDL replicator if it exists
 	if r.DDLReplicator != nil {
 		if err := r.DDLReplicator.Shutdown(ctx); err != nil {
 			r.Logger.Warn().Err(err).Msg("Failed to shutdown DDL replicator")
 		}
 	}
 
-	// Save state and close connections
 	if err := r.SaveState(r.LastLSN); err != nil {
 		r.Logger.Warn().Err(err).Msg("Failed to save final state")
 	}
@@ -509,7 +505,6 @@ func (r *BaseReplicator) GracefulShutdown(ctx context.Context) error {
 func (r *BaseReplicator) closeConnections(ctx context.Context) error {
 	r.Logger.Info().Msg("Closing database connections")
 
-	// Close replication connection first
 	if r.ReplicationConn != nil {
 		if err := r.ReplicationConn.Close(ctx); err != nil {
 			r.Logger.Error().Err(err).Msg("Failed to close replication connection")
@@ -517,7 +512,6 @@ func (r *BaseReplicator) closeConnections(ctx context.Context) error {
 		r.ReplicationConn = nil
 	}
 
-	// Close standard connection
 	if r.StandardConn != nil {
 		if err := r.StandardConn.Close(ctx); err != nil {
 			r.Logger.Error().Err(err).Msg("Failed to close standard connection")
@@ -525,7 +519,6 @@ func (r *BaseReplicator) closeConnections(ctx context.Context) error {
 		r.StandardConn = nil
 	}
 
-	// Close DDL connection if exists
 	if r.DDLReplicator != nil && r.DDLReplicator.DDLConn != nil {
 		if err := r.DDLReplicator.DDLConn.Close(ctx); err != nil {
 			r.Logger.Error().Err(err).Msg("Failed to close DDL connection")
@@ -569,6 +562,7 @@ func (r *BaseReplicator) CheckReplicationSlotStatus(ctx context.Context) error {
 	return nil
 }
 
+// Start creates the publication, replication slot, ddl tracking (if any) and starts the replication
 func (r *BaseReplicator) Start(ctx context.Context) error {
 	r.mu.Lock()
 	if r.started {
@@ -579,17 +573,14 @@ func (r *BaseReplicator) Start(ctx context.Context) error {
 	r.stopChan = make(chan struct{})
 	r.mu.Unlock()
 
-	// Create publication first (uses standard connection)
 	if err := r.CreatePublication(); err != nil {
 		return fmt.Errorf("failed to create publication: %w", err)
 	}
 
-	// Create replication slot (uses standard connection)
 	if err := r.CreateReplicationSlot(ctx); err != nil {
 		return fmt.Errorf("failed to create replication slot: %w", err)
 	}
 
-	// Setup and start DDL tracking if enabled
 	if r.Config.TrackDDL && r.DDLReplicator != nil {
 		if err := r.DDLReplicator.SetupDDLTracking(ctx); err != nil {
 			return fmt.Errorf("failed to setup DDL tracking: %w", err)
@@ -600,6 +591,7 @@ func (r *BaseReplicator) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop triggers a graceful shutdown of the replicator
 func (r *BaseReplicator) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	if !r.started || r.stopped {

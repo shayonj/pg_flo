@@ -289,7 +289,6 @@ func (d *DDLReplicator) HasPendingDDLEvents(ctx context.Context) (bool, error) {
 
 // shouldSkipDDLEvent determines if a DDL event should be skipped from processing
 func (d *DDLReplicator) shouldSkipDDLEvent(ddlCommand string) bool {
-	// Skip pg_flo internal operations
 	if strings.Contains(ddlCommand, "internal_pg_flo.") {
 		return true
 	}
