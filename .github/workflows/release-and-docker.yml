@@ -63,6 +63,10 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Set build timestamp
+        id: timestamp
+        run: echo "timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
       - name: Build and push (shayonj)
         uses: docker/build-push-action@v5
         with:
@@ -74,7 +78,7 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
-            DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            DATE=${{ steps.timestamp.outputs.timestamp }}
 
       - name: Extract metadata (pgflo)
         id: meta_pgflo
@@ -103,4 +107,4 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
-            DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            DATE=${{ steps.timestamp.outputs.timestamp }}
