@@ -33,9 +33,9 @@ make build
 
 setup_docker
 
-log "Running e2e transform filter tests..."
-if CI=false ./internal/scripts/e2e_transform_filter.sh; then
-  success "e2e transform filter tests completed successfully"
+log "Running e2e postgres tests..."
+if CI=false ./internal/scripts/e2e_postgres.sh; then
+  success "e2e postgres tests completed successfully"
 else
   error "Original e2e tests failed"
   exit 1

@@ -94,7 +94,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 			BaseReplicator: replicator.BaseReplicator{
 				StandardConn: mockStandardConn,
 				NATSClient:   mockNATSClient,
-				Logger:       zerolog.Nop(),
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 				Config: replicator.Config{
 					Tables:   []string{"users"},
 					Schema:   "public",
@@ -165,7 +165,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 			BaseReplicator: replicator.BaseReplicator{
 				StandardConn: mockStandardConn,
 				NATSClient:   mockNATSClient,
-				Logger:       zerolog.Nop(),
+				Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 				Config: replicator.Config{
 					Tables:   []string{"users"},
 					Schema:   "public",
@@ -339,7 +339,7 @@ func TestCopyAndStreamReplicator(t *testing.T) {
 					BaseReplicator: replicator.BaseReplicator{
 						StandardConn: mockStandardConn,
 						NATSClient:   mockNATSClient,
-						Logger:       zerolog.Nop(),
+						Logger:       utils.NewZerologLogger(zerolog.New(nil)),
 						Config: replicator.Config{
 							Tables:   []string{"test_table"},
 							Schema:   "public",

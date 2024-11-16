@@ -25,7 +25,7 @@ type Worker struct {
 	router         *routing.Router
 	sink           sinks.Sink
 	group          string
-	logger         zerolog.Logger
+	logger         utils.Logger
 	batchSize      int
 	buffer         []*utils.CDCMessage
 	lastSavedState uint64
@@ -51,7 +51,7 @@ func init() {
 
 // NewWorker creates and returns a new Worker instance with the provided NATS client
 func NewWorker(natsClient *pgflonats.NATSClient, ruleEngine *rules.RuleEngine, router *routing.Router, sink sinks.Sink, group string, opts ...Option) *Worker {
-	logger := log.With().Str("component", "worker").Logger()
+	logger := utils.NewZerologLogger(log.With().Str("component", "worker").Logger())
 
 	w := &Worker{
 		natsClient:     natsClient,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pgflo/pg_flo/pkg/replicator"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -16,7 +17,7 @@ import (
 func TestDDLReplicator(t *testing.T) {
 	t.Run("NewDDLReplicator", func(t *testing.T) {
 		mockBaseReplicator := &replicator.BaseReplicator{
-			Logger: zerolog.Logger{},
+			Logger: utils.NewZerologLogger(zerolog.New(nil)),
 		}
 		mockStandardConn := &MockStandardConnection{}
 		config := replicator.Config{}
@@ -32,7 +33,7 @@ func TestDDLReplicator(t *testing.T) {
 	t.Run("SetupDDLTracking", func(t *testing.T) {
 		mockStandardConn := &MockStandardConnection{}
 		mockBaseRepl := &replicator.BaseReplicator{
-			Logger:       zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger(),
+			Logger:       utils.NewZerologLogger(zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()),
 			StandardConn: mockStandardConn,
 			Config: replicator.Config{
 				Schema: "public",
@@ -65,7 +66,7 @@ func TestDDLReplicator(t *testing.T) {
 	t.Run("StartDDLReplication", func(t *testing.T) {
 		mockStandardConn := &MockStandardConnection{}
 		mockBaseReplicator := &replicator.BaseReplicator{
-			Logger: zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger(),
+			Logger: utils.NewZerologLogger(zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()),
 		}
 		ddlReplicator := &replicator.DDLReplicator{
 			DDLConn:  mockStandardConn,

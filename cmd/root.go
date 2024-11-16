@@ -280,7 +280,22 @@ func runReplicator(_ *cobra.Command, _ []string) {
 
 	maxCopyWorkersPerTable := viper.GetInt("max-copy-workers-per-table")
 
-	rep, err := replicator.NewReplicator(config, natsClient, copyAndStream, copyMode, maxCopyWorkersPerTable)
+	var factory replicator.Factory
+
+	if copyMode {
+		factory = &replicator.CopyAndStreamReplicatorFactory{
+			MaxCopyWorkersPerTable: maxCopyWorkersPerTable,
+			CopyOnly:               true,
+		}
+	} else if copyAndStream {
+		factory = &replicator.CopyAndStreamReplicatorFactory{
+			MaxCopyWorkersPerTable: maxCopyWorkersPerTable,
+		}
+	} else {
+		factory = &replicator.StreamReplicatorFactory{}
+	}
+
+	rep, err := factory.CreateReplicator(config, natsClient)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create replicator")
 	}
