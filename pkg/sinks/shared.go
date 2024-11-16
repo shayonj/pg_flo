@@ -1,6 +1,6 @@
 package sinks
 
-import "github.com/shayonj/pg_flo/pkg/utils"
+import "github.com/pgflo/pg_flo/pkg/utils"
 
 func buildDecodedMessage(message *utils.CDCMessage) (map[string]interface{}, error) {
 	decodedMessage := make(map[string]interface{})

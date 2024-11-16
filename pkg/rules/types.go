@@ -3,7 +3,7 @@ package rules
 import (
 	"sync"
 
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 // Rule interface defines the methods that all rules must implement

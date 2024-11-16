@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/goccy/go-json"
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 // StdoutSink represents a sink that writes data to standard output

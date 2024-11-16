@@ -3,7 +3,7 @@ package rules
 import (
 	"fmt"
 
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 // AddRule adds a new rule for the specified table

@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/pgflo/pg_flo/pkg/replicator"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/rs/zerolog"
-	"github.com/shayonj/pg_flo/pkg/replicator"
-	"github.com/shayonj/pg_flo/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

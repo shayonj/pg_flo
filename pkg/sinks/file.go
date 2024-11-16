@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 // InitializeOIDMap initializes the OID to type name map with custom types from the database

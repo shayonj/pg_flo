@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/shayonj/pg_flo/pkg/utils"
 )
 
 func init() {

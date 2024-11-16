@@ -47,14 +47,8 @@ jobs:
         with:
           buildkitd-flags: --debug
 
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
+      - name: Extract metadata (shayonj)
+        id: meta_shayonj
         uses: docker/metadata-action@v5
         with:
           images: docker.io/shayonj/pg_flo
@@ -63,14 +57,49 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
-      - name: Build and push
+      - name: Login to DockerHub (shayonj)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push (shayonj)
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_shayonj.outputs.tags }}
+          labels: ${{ steps.meta_shayonj.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ format('2006-01-02T15:04:05Z') }}
+
+      - name: Extract metadata (pgflo)
+        id: meta_pgflo
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/pgflo/pg_flo
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Login to DockerHub (pgflo)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.PG_FLO_DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.PG_FLO_DOCKER_HUB_TOKEN }}
+
+      - name: Build and push (pgflo)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_pgflo.outputs.tags }}
+          labels: ${{ steps.meta_pgflo.outputs.labels }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}

@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pglogrepl"
-	"github.com/shayonj/pg_flo/pkg/routing"
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/routing"
+	"github.com/pgflo/pg_flo/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
 

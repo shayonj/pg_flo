@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shayonj/pg_flo/pkg/replicator"
+	"github.com/pgflo/pg_flo/pkg/replicator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

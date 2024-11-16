@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgtype"
-	"github.com/shayonj/pg_flo/pkg/utils"
+	"github.com/pgflo/pg_flo/pkg/utils"
 )
 
 type DDLReplicator struct {

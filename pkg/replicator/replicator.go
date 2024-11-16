@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/shayonj/pg_flo/pkg/pgflonats"
+	"github.com/pgflo/pg_flo/pkg/pgflonats"
 )
 
 // NewReplicator creates a new Replicator based on the configuration
