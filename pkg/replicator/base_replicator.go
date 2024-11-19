@@ -38,6 +38,8 @@ type BaseReplicator struct {
 	started              bool
 	stopped              bool
 	mu                   sync.RWMutex
+	currentTxBuffer      []utils.CDCMessage
+	currentTxLSN         pglogrepl.LSN
 }
 
 // NewBaseReplicator creates a new BaseReplicator instance
@@ -313,7 +315,9 @@ func (r *BaseReplicator) handleRelationMessage(msg *pglogrepl.RelationMessage) {
 }
 
 // HandleBeginMessage handles BeginMessage messages
-func (r *BaseReplicator) HandleBeginMessage(_ *pglogrepl.BeginMessage) error {
+func (r *BaseReplicator) HandleBeginMessage(msg *pglogrepl.BeginMessage) error {
+	r.currentTxBuffer = make([]utils.CDCMessage, 0)
+	r.currentTxLSN = msg.FinalLSN
 	return nil
 }
 
@@ -335,7 +339,8 @@ func (r *BaseReplicator) HandleInsertMessage(msg *pglogrepl.InsertMessage, lsn p
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
-	return r.PublishToNATS(cdcMessage)
+	r.currentTxBuffer = append(r.currentTxBuffer, cdcMessage)
+	return nil
 }
 
 // HandleUpdateMessage handles UpdateMessage messages
@@ -365,8 +370,8 @@ func (r *BaseReplicator) HandleUpdateMessage(msg *pglogrepl.UpdateMessage, lsn p
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
-
-	return r.PublishToNATS(cdcMessage)
+	r.currentTxBuffer = append(r.currentTxBuffer, cdcMessage)
+	return nil
 }
 
 // HandleDeleteMessage handles DeleteMessage messages
@@ -387,18 +392,25 @@ func (r *BaseReplicator) HandleDeleteMessage(msg *pglogrepl.DeleteMessage, lsn p
 	}
 
 	r.AddPrimaryKeyInfo(&cdcMessage, relation.RelationName)
-	return r.PublishToNATS(cdcMessage)
+	r.currentTxBuffer = append(r.currentTxBuffer, cdcMessage)
+	return nil
 }
 
 // HandleCommitMessage processes a commit message and publishes it to NATS
 func (r *BaseReplicator) HandleCommitMessage(msg *pglogrepl.CommitMessage) error {
-	r.LastLSN = msg.CommitLSN
+	for _, cdcMessage := range r.currentTxBuffer {
+		if err := r.PublishToNATS(cdcMessage); err != nil {
+			return fmt.Errorf("failed to publish message: %w", err)
+		}
+	}
 
+	r.LastLSN = msg.CommitLSN
 	if err := r.SaveState(msg.CommitLSN); err != nil {
 		r.Logger.Error().Err(err).Msg("Failed to save replication state")
 		return err
 	}
 
+	r.currentTxBuffer = nil
 	return nil
 }
 
@@ -603,4 +615,14 @@ func (r *BaseReplicator) Stop(ctx context.Context) error {
 	r.mu.Unlock()
 
 	return r.GracefulShutdown(ctx)
+}
+
+// CurrentTxBuffer returns the current transaction buffer (for testing)
+func (r *BaseReplicator) CurrentTxBuffer() []utils.CDCMessage {
+	return r.currentTxBuffer
+}
+
+// SetCurrentTxBuffer sets the current transaction buffer (for testing)
+func (r *BaseReplicator) SetCurrentTxBuffer(messages []utils.CDCMessage) {
+	r.currentTxBuffer = messages
 }
