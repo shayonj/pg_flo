@@ -342,10 +342,8 @@ func TestBaseReplicator(t *testing.T) {
 
 	t.Run("HandleInsertMessage", func(t *testing.T) {
 		t.Run("Successful handling of InsertMessage", func(t *testing.T) {
-			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
-				NATSClient: mockNATSClient,
-				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
+				Logger: utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -370,28 +368,16 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
-				var decodedMsg utils.CDCMessage
-				err := decodedMsg.UnmarshalBinary(data)
-				if err != nil {
-					t.Logf("Failed to unmarshal binary data: %v", err)
-					return false
-				}
-
-				assert.Equal(t, utils.OperationInsert, decodedMsg.Type)
-				assert.Equal(t, "public", decodedMsg.Schema)
-				assert.Equal(t, "users", decodedMsg.Table)
-				assert.Equal(t, msg.Tuple, decodedMsg.NewTuple)
-				assert.Nil(t, decodedMsg.OldTuple)
-
-				return true
-			})).Return(nil)
-
 			err := br.HandleInsertMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
-			mockNATSClient.AssertExpectations(t)
-
+			assert.Len(t, br.CurrentTxBuffer(), 1)
+			bufferedMsg := br.CurrentTxBuffer()[0]
+			assert.Equal(t, utils.OperationInsert, bufferedMsg.Type)
+			assert.Equal(t, "public", bufferedMsg.Schema)
+			assert.Equal(t, "users", bufferedMsg.Table)
+			assert.Equal(t, msg.Tuple, bufferedMsg.NewTuple)
+			assert.Nil(t, bufferedMsg.OldTuple)
 		})
 
 		t.Run("Unknown relation ID", func(t *testing.T) {
@@ -511,11 +497,8 @@ func TestBaseReplicator(t *testing.T) {
 
 			for _, tc := range testCases {
 				t.Run(tc.name, func(t *testing.T) {
-					mockNATSClient := new(MockNATSClient)
-
 					br := &replicator.BaseReplicator{
-						NATSClient: mockNATSClient,
-						Logger:     utils.NewZerologLogger(zerolog.New(nil)),
+						Logger: utils.NewZerologLogger(zerolog.New(nil)),
 						Relations: map[uint32]*pglogrepl.RelationMessage{
 							1: {
 								RelationID:   1,
@@ -545,59 +528,48 @@ func TestBaseReplicator(t *testing.T) {
 						msg.Tuple.Columns[i] = &pglogrepl.TupleDataColumn{Data: data}
 					}
 
-					mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
-						var decodedMsg utils.CDCMessage
-						err := decodedMsg.UnmarshalBinary(data)
-						if err != nil {
-							t.Logf("Failed to unmarshal binary data: %v", err)
-							return false
-						}
-
-						assert.Equal(t, utils.OperationInsert, decodedMsg.Type)
-						assert.Equal(t, "public", decodedMsg.Schema)
-						assert.Equal(t, "test_table", decodedMsg.Table)
-
-						assert.Equal(t, len(tc.expected), len(decodedMsg.NewTuple.Columns))
-						for i, expectedValue := range tc.expected {
-							actualColumn := decodedMsg.NewTuple.Columns[i]
-							expectedType := expectedValue["type"].(string)
-							expectedVal := expectedValue["value"]
-
-							assert.Equal(t, expectedType, utils.OIDToString(decodedMsg.Columns[i].DataType), "Type mismatch for field %s", decodedMsg.Columns[i].Name)
-
-							switch expectedType {
-							case "int4", "int8":
-								assert.Equal(t, []byte(fmt.Sprintf("%d", expectedVal)), actualColumn.Data)
-							case "float8":
-								expectedFloat, _ := strconv.ParseFloat(string(actualColumn.Data), 64)
-								assert.InDelta(t, expectedVal, expectedFloat, 0.000001, "Float value mismatch for field %s", decodedMsg.Columns[i].Name)
-							case "bool":
-								if expectedVal.(bool) {
-									assert.Equal(t, []byte("true"), actualColumn.Data)
-								} else {
-									assert.Equal(t, []byte("false"), actualColumn.Data)
-								}
-							case "text", "varchar":
-								assert.Equal(t, []byte(expectedVal.(string)), actualColumn.Data)
-							case "jsonb":
-								assert.JSONEq(t, string(expectedVal.(json.RawMessage)), string(actualColumn.Data))
-							case "bytea":
-								assert.Equal(t, expectedVal, actualColumn.Data)
-							case "timestamptz":
-								expectedTime := expectedVal.(time.Time)
-								assert.Equal(t, []byte(expectedTime.Format("2006-01-02 15:04:05.999999Z07:00")), actualColumn.Data)
-							default:
-								assert.Equal(t, []byte(fmt.Sprintf("%v", expectedVal)), actualColumn.Data)
-							}
-						}
-
-						return true
-					})).Return(nil)
-
 					err := br.HandleInsertMessage(msg, pglogrepl.LSN(0))
 					assert.NoError(t, err)
 
-					mockNATSClient.AssertExpectations(t)
+					assert.Len(t, br.CurrentTxBuffer(), 1)
+					bufferedMsg := br.CurrentTxBuffer()[0]
+					assert.Equal(t, utils.OperationInsert, bufferedMsg.Type)
+					assert.Equal(t, "public", bufferedMsg.Schema)
+					assert.Equal(t, "test_table", bufferedMsg.Table)
+
+					assert.Equal(t, len(tc.expected), len(bufferedMsg.NewTuple.Columns))
+					for i, expectedValue := range tc.expected {
+						actualColumn := bufferedMsg.NewTuple.Columns[i]
+						expectedType := expectedValue["type"].(string)
+						expectedVal := expectedValue["value"]
+
+						assert.Equal(t, expectedType, utils.OIDToString(bufferedMsg.Columns[i].DataType), "Type mismatch for field %s", bufferedMsg.Columns[i].Name)
+
+						switch expectedType {
+						case "int4", "int8":
+							assert.Equal(t, []byte(fmt.Sprintf("%d", expectedVal)), actualColumn.Data)
+						case "float8":
+							expectedFloat, _ := strconv.ParseFloat(string(actualColumn.Data), 64)
+							assert.InDelta(t, expectedVal, expectedFloat, 0.000001, "Float value mismatch for field %s", bufferedMsg.Columns[i].Name)
+						case "bool":
+							if expectedVal.(bool) {
+								assert.Equal(t, []byte("true"), actualColumn.Data)
+							} else {
+								assert.Equal(t, []byte("false"), actualColumn.Data)
+							}
+						case "text", "varchar":
+							assert.Equal(t, []byte(expectedVal.(string)), actualColumn.Data)
+						case "jsonb":
+							assert.JSONEq(t, string(expectedVal.(json.RawMessage)), string(actualColumn.Data))
+						case "bytea":
+							assert.Equal(t, expectedVal, actualColumn.Data)
+						case "timestamptz":
+							expectedTime := expectedVal.(time.Time)
+							assert.Equal(t, []byte(expectedTime.Format("2006-01-02 15:04:05.999999Z07:00")), actualColumn.Data)
+						default:
+							assert.Equal(t, []byte(fmt.Sprintf("%v", expectedVal)), actualColumn.Data)
+						}
+					}
 				})
 			}
 		})
@@ -605,10 +577,8 @@ func TestBaseReplicator(t *testing.T) {
 
 	t.Run("HandleUpdateMessage", func(t *testing.T) {
 		t.Run("Successful handling of UpdateMessage", func(t *testing.T) {
-			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
-				NATSClient: mockNATSClient,
-				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
+				Logger: utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -639,27 +609,16 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
-				var decodedMsg utils.CDCMessage
-				err := decodedMsg.UnmarshalBinary(data)
-				if err != nil {
-					t.Logf("Failed to unmarshal binary data: %v", err)
-					return false
-				}
-
-				assert.Equal(t, utils.OperationUpdate, decodedMsg.Type)
-				assert.Equal(t, "public", decodedMsg.Schema)
-				assert.Equal(t, "users", decodedMsg.Table)
-				assert.Equal(t, msg.OldTuple, decodedMsg.OldTuple)
-				assert.Equal(t, msg.NewTuple, decodedMsg.NewTuple)
-
-				return true
-			})).Return(nil)
-
 			err := br.HandleUpdateMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
-			mockNATSClient.AssertExpectations(t)
+			assert.Len(t, br.CurrentTxBuffer(), 1)
+			bufferedMsg := br.CurrentTxBuffer()[0]
+			assert.Equal(t, utils.OperationUpdate, bufferedMsg.Type)
+			assert.Equal(t, "public", bufferedMsg.Schema)
+			assert.Equal(t, "users", bufferedMsg.Table)
+			assert.Equal(t, msg.OldTuple, bufferedMsg.OldTuple)
+			assert.Equal(t, msg.NewTuple, bufferedMsg.NewTuple)
 		})
 
 		t.Run("Unknown relation ID", func(t *testing.T) {
@@ -676,11 +635,8 @@ func TestBaseReplicator(t *testing.T) {
 		})
 
 		t.Run("HandleUpdateMessage with nil OldTuple", func(t *testing.T) {
-			mockNATSClient := new(MockNATSClient)
-
 			br := &replicator.BaseReplicator{
-				NATSClient: mockNATSClient,
-				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
+				Logger: utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -706,41 +662,29 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
-				var decodedMsg utils.CDCMessage
-				err := decodedMsg.UnmarshalBinary(data)
-				if err != nil {
-					t.Logf("Failed to unmarshal binary data: %v", err)
-					return false
-				}
-
-				assert.Equal(t, utils.OperationUpdate, decodedMsg.Type)
-				assert.Equal(t, "public", decodedMsg.Schema)
-				assert.Equal(t, "users", decodedMsg.Table)
-				assert.Nil(t, decodedMsg.OldTuple)
-				assert.NotNil(t, decodedMsg.NewTuple)
-
-				assert.Equal(t, uint32(pgtype.Int4OID), decodedMsg.Columns[0].DataType)
-				assert.Equal(t, uint32(pgtype.TextOID), decodedMsg.Columns[1].DataType)
-				assert.Equal(t, []byte("1"), decodedMsg.NewTuple.Columns[0].Data)
-				assert.Equal(t, []byte("John Doe"), decodedMsg.NewTuple.Columns[1].Data)
-
-				return true
-			})).Return(nil)
-
 			err := br.HandleUpdateMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
-			mockNATSClient.AssertExpectations(t)
+			assert.Len(t, br.CurrentTxBuffer(), 1)
+			bufferedMsg := br.CurrentTxBuffer()[0]
+
+			assert.Equal(t, utils.OperationUpdate, bufferedMsg.Type)
+			assert.Equal(t, "public", bufferedMsg.Schema)
+			assert.Equal(t, "users", bufferedMsg.Table)
+			assert.Nil(t, bufferedMsg.OldTuple)
+			assert.NotNil(t, bufferedMsg.NewTuple)
+
+			assert.Equal(t, uint32(pgtype.Int4OID), bufferedMsg.Columns[0].DataType)
+			assert.Equal(t, uint32(pgtype.TextOID), bufferedMsg.Columns[1].DataType)
+			assert.Equal(t, []byte("1"), bufferedMsg.NewTuple.Columns[0].Data)
+			assert.Equal(t, []byte("John Doe"), bufferedMsg.NewTuple.Columns[1].Data)
 		})
 	})
 
 	t.Run("HandleDeleteMessage", func(t *testing.T) {
 		t.Run("Successful handling of DeleteMessage", func(t *testing.T) {
-			mockNATSClient := new(MockNATSClient)
 			br := &replicator.BaseReplicator{
-				NATSClient: mockNATSClient,
-				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
+				Logger: utils.NewZerologLogger(zerolog.New(nil)),
 				Relations: map[uint32]*pglogrepl.RelationMessage{
 					1: {
 						RelationID:   1,
@@ -765,27 +709,16 @@ func TestBaseReplicator(t *testing.T) {
 				},
 			}
 
-			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.MatchedBy(func(data []byte) bool {
-				var decodedMsg utils.CDCMessage
-				err := decodedMsg.UnmarshalBinary(data)
-				if err != nil {
-					t.Logf("Failed to unmarshal binary data: %v", err)
-					return false
-				}
-
-				assert.Equal(t, utils.OperationDelete, decodedMsg.Type)
-				assert.Equal(t, "public", decodedMsg.Schema)
-				assert.Equal(t, "users", decodedMsg.Table)
-				assert.Equal(t, msg.OldTuple, decodedMsg.OldTuple)
-				assert.Nil(t, decodedMsg.NewTuple)
-
-				return true
-			})).Return(nil)
-
 			err := br.HandleDeleteMessage(msg, pglogrepl.LSN(0))
 			assert.NoError(t, err)
 
-			mockNATSClient.AssertExpectations(t)
+			assert.Len(t, br.CurrentTxBuffer(), 1)
+			bufferedMsg := br.CurrentTxBuffer()[0]
+			assert.Equal(t, utils.OperationDelete, bufferedMsg.Type)
+			assert.Equal(t, "public", bufferedMsg.Schema)
+			assert.Equal(t, "users", bufferedMsg.Table)
+			assert.Equal(t, msg.OldTuple, bufferedMsg.OldTuple)
+			assert.Nil(t, bufferedMsg.NewTuple)
 		})
 
 		t.Run("Unknown relation ID", func(t *testing.T) {
@@ -802,25 +735,43 @@ func TestBaseReplicator(t *testing.T) {
 	})
 
 	t.Run("HandleCommitMessage", func(t *testing.T) {
-		t.Run("Successful handling of CommitMessage", func(t *testing.T) {
+		t.Run("Successful commit with buffered messages", func(t *testing.T) {
 			mockNATSClient := new(MockNATSClient)
-
 			br := &replicator.BaseReplicator{
 				NATSClient: mockNATSClient,
 				Logger:     utils.NewZerologLogger(zerolog.New(nil)),
+				Config:     replicator.Config{Group: "test_pub"},
 			}
 
-			msg := &pglogrepl.CommitMessage{
-				CommitTime: time.Now(),
-				CommitLSN:  12345,
+			testMessages := []utils.CDCMessage{
+				{
+					Type:   utils.OperationInsert,
+					Schema: "public",
+					Table:  "users",
+				},
+				{
+					Type:   utils.OperationUpdate,
+					Schema: "public",
+					Table:  "users",
+				},
 			}
+			br.SetCurrentTxBuffer(testMessages)
+
+			commitMsg := &pglogrepl.CommitMessage{
+				CommitTime: time.Now(),
+				CommitLSN:  pglogrepl.LSN(100),
+			}
+
+			mockNATSClient.On("PublishMessage", "pgflo.test_pub", mock.Anything).Return(nil).Times(2)
 
 			mockNATSClient.On("GetState").Return(pgflonats.State{}, nil)
+			mockNATSClient.On("SaveState", pgflonats.State{LSN: commitMsg.CommitLSN}).Return(nil)
 
-			mockNATSClient.On("SaveState", pgflonats.State{LSN: pglogrepl.LSN(12345)}).Return(nil)
-
-			err := br.HandleCommitMessage(msg)
+			err := br.HandleCommitMessage(commitMsg)
 			assert.NoError(t, err)
+
+			assert.Empty(t, br.CurrentTxBuffer())
+			assert.Equal(t, commitMsg.CommitLSN, br.LastLSN)
 
 			mockNATSClient.AssertExpectations(t)
 		})
